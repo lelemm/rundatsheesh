@@ -171,12 +171,48 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   });
 
   it("allowIps: denies non-allowlisted destination", async () => {
-    const deny = await vmExec(vmDeny, "curl -fsS --max-time 2 http://172.16.0.1:18080/ >/dev/null");
+    // Use `run-ts` (Deno) instead of `exec` because `exec` is confined to a BusyBox-only chroot under /home/user,
+    // so common HTTP clients (curl/wget) may not exist.
+    const deny = await vmRunTs(
+      vmDeny,
+      [
+        'const url = "http://172.16.0.1:18080/";',
+        "const ctrl = new AbortController();",
+        "const t = setTimeout(() => ctrl.abort(), 2000);",
+        "try {",
+        "  const res = await fetch(url, { signal: ctrl.signal });",
+        "  const text = await res.text();",
+        "  console.log(text);",
+        "} catch (err) {",
+        "  console.error(String(err));",
+        "  Deno.exit(2);",
+        "} finally {",
+        "  clearTimeout(t);",
+        "}"
+      ].join("\n")
+    );
     expect(deny.exitCode).not.toBe(0);
   });
 
   it("allowIps: allows allowlisted destination", async () => {
-    const allow = await vmExec(vmOk, "curl -fsS --max-time 2 http://172.16.0.1:18080/");
+    const allow = await vmRunTs(
+      vmOk,
+      [
+        'const url = "http://172.16.0.1:18080/";',
+        "const ctrl = new AbortController();",
+        "const t = setTimeout(() => ctrl.abort(), 2000);",
+        "try {",
+        "  const res = await fetch(url, { signal: ctrl.signal });",
+        "  const text = await res.text();",
+        "  console.log(text);",
+        "} catch (err) {",
+        "  console.error(String(err));",
+        "  Deno.exit(2);",
+        "} finally {",
+        "  clearTimeout(t);",
+        "}"
+      ].join("\n")
+    );
     expect(allow.exitCode).toBe(0);
     expect(allow.stdout.trim()).toBe("ok");
   });
