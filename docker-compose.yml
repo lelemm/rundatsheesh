@@ -28,10 +28,21 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
+      - seccomp=unconfined
+      - apparmor=unconfined
     cap_drop:
       - ALL
     cap_add:
       - NET_ADMIN
+      # Required by Firecracker jailer (mount namespace + chroot + privilege drop + dev setup).
+      - SYS_ADMIN
+      - SYS_CHROOT
+      - SETUID
+      - SETGID
+      - MKNOD
+      - CHOWN
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
     tmpfs:
       - /tmp
       - /run

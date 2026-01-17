@@ -11,7 +11,6 @@ export interface VmServiceOptions {
   network: NetworkManager;
   agentClient: AgentClient;
   storage: StorageProvider;
-  kernelPath: string;
   snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   vsockCidStart?: number;
   limits?: {
@@ -30,7 +29,6 @@ export class VmService {
   private readonly network: NetworkManager;
   private readonly agentClient: AgentClient;
   private readonly storage: StorageProvider;
-  private readonly kernelPath: string;
   private readonly snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   private readonly limits: NonNullable<VmServiceOptions["limits"]>;
   private nextVsockCid: number;
@@ -41,7 +39,6 @@ export class VmService {
     this.network = options.network;
     this.agentClient = options.agentClient;
     this.storage = options.storage;
-    this.kernelPath = options.kernelPath;
     this.snapshots = options.snapshots;
     this.limits = options.limits ?? {
       maxVms: 20,
@@ -77,6 +74,7 @@ export class VmService {
     const { guestIp, tapName } = await this.network.allocateIp();
     const tStorageStart = Date.now();
     let rootfsPath = "";
+    let kernelPath = "";
     let logsDir = "";
     if (request.snapshotId) {
       const snap = await this.storage.getSnapshotArtifactPaths(request.snapshotId);
@@ -96,10 +94,12 @@ export class VmService {
       const prepared = await this.storage.prepareVmStorageFromDisk(id, snap.diskPath);
       rootfsPath = prepared.rootfsPath;
       logsDir = prepared.logsDir;
+      kernelPath = prepared.kernelPath;
     } else {
       const prepared = await this.storage.prepareVmStorage(id);
       rootfsPath = prepared.rootfsPath;
       logsDir = prepared.logsDir;
+      kernelPath = prepared.kernelPath;
     }
     const storageMs = Date.now() - tStorageStart;
 
@@ -114,6 +114,7 @@ export class VmService {
       outboundInternet: request.outboundInternet ?? false,
       allowIps: request.allowIps,
       rootfsPath,
+      kernelPath,
       logsDir,
       createdAt
     };
@@ -130,7 +131,7 @@ export class VmService {
 
         await this.network.configure(vm, tapName, { up: false });
         const tRestoreStart = Date.now();
-        await this.firecracker.restoreFromSnapshot(vm, rootfsPath, this.kernelPath, tapName, {
+        await this.firecracker.restoreFromSnapshot(vm, rootfsPath, vm.kernelPath, tapName, {
           memPath: snapshotPaths.memPath,
           statePath: snapshotPaths.statePath
         });
@@ -187,7 +188,7 @@ export class VmService {
           await this.network.configure(vm, tapName, { up: false });
           try {
             const tRestoreStart = Date.now();
-            await this.firecracker.restoreFromSnapshot(vm, rootfsPath, this.kernelPath, tapName, {
+            await this.firecracker.restoreFromSnapshot(vm, rootfsPath, vm.kernelPath, tapName, {
               memPath: snapshotPaths.memPath,
               statePath: snapshotPaths.statePath
             });
@@ -201,19 +202,19 @@ export class VmService {
             await this.firecracker.destroy(vm).catch(() => undefined);
             await this.network.bringUpTap(tapName).catch(() => undefined);
             const tFirecrackerStart = Date.now();
-            await this.firecracker.createAndStart(vm, rootfsPath, this.kernelPath, tapName);
+            await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName);
             firecrackerMs = Date.now() - tFirecrackerStart;
           }
         } else {
           await this.network.configure(vm, tapName);
           const tFirecrackerStart = Date.now();
-          await this.firecracker.createAndStart(vm, rootfsPath, this.kernelPath, tapName);
+          await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName);
           firecrackerMs = Date.now() - tFirecrackerStart;
         }
       } else {
         await this.network.configure(vm, tapName);
         const tFirecrackerStart = Date.now();
-        await this.firecracker.createAndStart(vm, rootfsPath, this.kernelPath, tapName);
+        await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName);
         firecrackerMs = Date.now() - tFirecrackerStart;
       }
 
@@ -302,7 +303,7 @@ export class VmService {
     await this.store.update(vm.id, { state: "STARTING" });
     await this.network.configure(vm, vm.tapName);
     const tFirecrackerStart = Date.now();
-    await this.firecracker.createAndStart(vm, vm.rootfsPath, this.kernelPath, vm.tapName);
+    await this.firecracker.createAndStart(vm, vm.rootfsPath, vm.kernelPath, vm.tapName);
     const firecrackerMs = Date.now() - tFirecrackerStart;
     const tAgentHealthStart = Date.now();
     await this.agentClient.health(vm.id);

@@ -3,44 +3,62 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { StorageProvider } from "../types/interfaces.js";
+import { jailerRootDir } from "../firecracker/socketPaths.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface LocalStorageOptions {
   baseRootfsPath: string;
   storageRoot: string;
+  kernelSrcPath: string;
+  jailerChrootBaseDir: string;
   rootfsCloneMode?: "auto" | "reflink" | "copy";
 }
 
 export class LocalStorageProvider implements StorageProvider {
   constructor(private readonly options: LocalStorageOptions) {}
 
-  async prepareVmStorage(vmId: string): Promise<{ rootfsPath: string; logsDir: string }> {
-    const vmDir = path.join(this.options.storageRoot, vmId);
-    const logsDir = path.join(vmDir, "logs");
-    await fs.mkdir(vmDir, { recursive: true });
+  async prepareVmStorage(vmId: string): Promise<{ rootfsPath: string; logsDir: string; kernelPath: string }> {
+    const jailRoot = jailerRootDir(this.options.jailerChrootBaseDir, vmId);
+    const logsDir = path.join(jailRoot, "logs");
+    const runDir = path.join(jailRoot, "run");
+    await fs.mkdir(jailRoot, { recursive: true });
     await fs.mkdir(logsDir, { recursive: true });
+    await fs.mkdir(runDir, { recursive: true });
 
-    const rootfsPath = path.join(vmDir, "rootfs.ext4");
+    const kernelPath = path.join(jailRoot, "vmlinux");
+    await fs.copyFile(this.options.kernelSrcPath, kernelPath);
+
+    const rootfsPath = path.join(jailRoot, "rootfs.ext4");
     await cloneRootfs(this.options.baseRootfsPath, rootfsPath, this.options.rootfsCloneMode ?? "auto");
+    // Firecracker runs as an unprivileged uid/gid after jailer drops privileges.
+    // Ensure it can open the backing disk for read/write.
+    await fs.chmod(rootfsPath, 0o666).catch(() => undefined);
 
-    return { rootfsPath, logsDir };
+    return { rootfsPath, logsDir, kernelPath };
   }
 
-  async prepareVmStorageFromDisk(vmId: string, diskSrcPath: string): Promise<{ rootfsPath: string; logsDir: string }> {
-    const vmDir = path.join(this.options.storageRoot, vmId);
-    const logsDir = path.join(vmDir, "logs");
-    await fs.mkdir(vmDir, { recursive: true });
+  async prepareVmStorageFromDisk(vmId: string, diskSrcPath: string): Promise<{ rootfsPath: string; logsDir: string; kernelPath: string }> {
+    const jailRoot = jailerRootDir(this.options.jailerChrootBaseDir, vmId);
+    const logsDir = path.join(jailRoot, "logs");
+    const runDir = path.join(jailRoot, "run");
+    await fs.mkdir(jailRoot, { recursive: true });
     await fs.mkdir(logsDir, { recursive: true });
+    await fs.mkdir(runDir, { recursive: true });
 
-    const rootfsPath = path.join(vmDir, "rootfs.ext4");
+    const kernelPath = path.join(jailRoot, "vmlinux");
+    await fs.copyFile(this.options.kernelSrcPath, kernelPath);
+
+    const rootfsPath = path.join(jailRoot, "rootfs.ext4");
     await this.cloneDisk(diskSrcPath, rootfsPath);
-    return { rootfsPath, logsDir };
+    await fs.chmod(rootfsPath, 0o666).catch(() => undefined);
+    return { rootfsPath, logsDir, kernelPath };
   }
 
   async cleanupVmStorage(vmId: string): Promise<void> {
-    const vmDir = path.join(this.options.storageRoot, vmId);
-    await fs.rm(vmDir, { recursive: true, force: true });
+    // VM metadata lives under STORAGE_ROOT/<vmId>, while runtime artifacts live under the jailer chroot base.
+    await fs.rm(path.join(this.options.storageRoot, vmId), { recursive: true, force: true });
+    await fs.rm(path.join(this.options.jailerChrootBaseDir, vmId), { recursive: true, force: true });
   }
 
   async getSnapshotArtifactPaths(

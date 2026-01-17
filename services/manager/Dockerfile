@@ -18,6 +18,11 @@ RUN apt-get update \
      ca-certificates curl iproute2 iptables nftables socat util-linux \
   && rm -rf /var/lib/apt/lists/*
 
+# Dedicated unprivileged user/group for Firecracker when launched via jailer.
+# Keep ids deterministic so volumes and chown behavior are stable across rebuilds.
+RUN getent group 1234 >/dev/null || groupadd -g 1234 fc \
+  && id -u fc >/dev/null 2>&1 || useradd -u 1234 -g 1234 -M -r -s /usr/sbin/nologin fc
+
 RUN curl -L "https://github.com/firecracker-microvm/firecracker/releases/download/v${FIRECRACKER_VERSION}/firecracker-v${FIRECRACKER_VERSION}-x86_64.tgz" \
   | tar -xz -C /tmp \
   && mv /tmp/release-v${FIRECRACKER_VERSION}-x86_64/firecracker-v${FIRECRACKER_VERSION}-x86_64 /usr/local/bin/firecracker \

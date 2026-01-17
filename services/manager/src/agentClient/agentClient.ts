@@ -10,6 +10,7 @@ import { execVsockUdsRaw } from "./vsockTransport.js";
 export interface VsockAgentOptions {
   agentPort: number;
   vsockUdsDir?: string;
+  vsockUdsPathForVm?: (vmId: string) => string;
   retry?: { attempts: number; delayMs: number };
   limits?: { maxJsonResponseBytes: number; maxBinaryResponseBytes: number };
   timeouts?: { defaultMs: number; healthMs: number; binaryMs: number };
@@ -181,6 +182,9 @@ export class VsockAgentClient implements AgentClient {
   }
 
   private vsockUdsPath(vmId: string): string {
+    if (typeof this.options.vsockUdsPathForVm === "function") {
+      return this.options.vsockUdsPathForVm(vmId);
+    }
     const dir = this.options.vsockUdsDir ?? "/run/fc";
     return path.join(dir, `${vmId}.vsock`);
   }

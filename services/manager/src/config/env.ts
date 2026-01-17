@@ -6,6 +6,12 @@ export interface EnvConfig {
   storageRoot: string;
   agentVsockPort: number;
   firecrackerBin: string;
+  jailer: {
+    bin: string;
+    chrootBaseDir: string;
+    uid: number;
+    gid: number;
+  };
   rootfsCloneMode: "auto" | "reflink" | "copy";
   enableSnapshots: boolean;
   snapshotTemplateCpu: number;
@@ -67,7 +73,16 @@ export function loadEnv(): EnvConfig {
     throw new Error("AGENT_VSOCK_PORT must be a positive number");
   }
 
-  const firecrackerBin = process.env.FIRECRACKER_BIN ?? "firecracker";
+  // Jailer requires an exec-file path that can be canonicalized; do not rely on PATH lookup here.
+  const firecrackerBin = process.env.FIRECRACKER_BIN ?? "/usr/local/bin/firecracker";
+
+  const jailerBin = process.env.JAILER_BIN ?? "/usr/local/bin/jailer";
+  const jailerChrootBaseDir = process.env.JAILER_CHROOT_BASE_DIR ?? `${storageRoot}/jailer`;
+  if (!jailerChrootBaseDir || typeof jailerChrootBaseDir !== "string" || !jailerChrootBaseDir.startsWith("/")) {
+    throw new Error("JAILER_CHROOT_BASE_DIR must be an absolute path");
+  }
+  const jailerUid = parsePositiveInt(process.env.JAILER_UID, "JAILER_UID", 1234);
+  const jailerGid = parsePositiveInt(process.env.JAILER_GID, "JAILER_GID", 1234);
 
   const rootfsCloneModeRaw = (process.env.ROOTFS_CLONE_MODE ?? "auto").toLowerCase();
   const rootfsCloneMode = (["auto", "reflink", "copy"] as const).includes(rootfsCloneModeRaw as any)
@@ -99,6 +114,12 @@ export function loadEnv(): EnvConfig {
     storageRoot,
     agentVsockPort,
     firecrackerBin,
+    jailer: {
+      bin: jailerBin,
+      chrootBaseDir: jailerChrootBaseDir,
+      uid: jailerUid,
+      gid: jailerGid
+    },
     rootfsCloneMode,
     enableSnapshots,
     snapshotTemplateCpu,

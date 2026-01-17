@@ -2,6 +2,7 @@ import { buildApp } from "./app.js";
 import { loadEnv } from "./config/env.js";
 import { VsockAgentClient } from "./agentClient/agentClient.js";
 import { FirecrackerManagerImpl } from "./firecracker/firecrackerManager.js";
+import { firecrackerVsockUdsPath } from "./firecracker/socketPaths.js";
 import { SimpleNetworkManager } from "./network/networkManager.js";
 import { LocalStorageProvider } from "./storage/storageProvider.js";
 import { FileVmStore } from "./state/fileVmStore.js";
@@ -22,12 +23,16 @@ async function main() {
   }
   const firecracker = new FirecrackerManagerImpl({
     firecrackerBin: env.firecrackerBin,
-    apiSocketDir: "/run/fc"
+    jailerBin: env.jailer.bin,
+    jailerChrootBaseDir: env.jailer.chrootBaseDir,
+    jailerUid: env.jailer.uid,
+    jailerGid: env.jailer.gid
   });
   const network = new SimpleNetworkManager({ subnetCidr: "172.16.0.0/24", gatewayIp: "172.16.0.1" });
   const agentClient = new VsockAgentClient({
     agentPort: env.agentVsockPort,
-    vsockUdsDir: "/run/fc",
+    // With jailer, the vsock UDS is inside the per-VM jail root; compute it deterministically.
+    vsockUdsPathForVm: (vmId) => firecrackerVsockUdsPath(env.jailer.chrootBaseDir, vmId),
     retry: { attempts: env.vsock.retryAttempts, delayMs: env.vsock.retryDelayMs },
     timeouts: { defaultMs: env.vsock.timeoutMs, healthMs: env.vsock.healthTimeoutMs, binaryMs: env.vsock.binaryTimeoutMs },
     limits: { maxJsonResponseBytes: env.vsock.maxJsonResponseBytes, maxBinaryResponseBytes: env.vsock.maxBinaryResponseBytes }
@@ -35,6 +40,8 @@ async function main() {
   const storage = new LocalStorageProvider({
     baseRootfsPath: env.baseRootfsPath,
     storageRoot: env.storageRoot,
+    kernelSrcPath: env.kernelPath,
+    jailerChrootBaseDir: env.jailer.chrootBaseDir,
     rootfsCloneMode: env.rootfsCloneMode
   });
 
@@ -48,7 +55,6 @@ async function main() {
     network,
     agentClient,
     storage,
-    kernelPath: env.kernelPath,
     limits: env.limits,
     snapshots: env.enableSnapshots
       ? { enabled: true, version: snapshotVersion, templateCpu: env.snapshotTemplateCpu, templateMemMb: env.snapshotTemplateMemMb }
@@ -70,7 +76,6 @@ async function main() {
       network,
       agentClient,
       storage,
-      kernelPath: env.kernelPath,
       version: snapshotVersion,
       cpu: env.snapshotTemplateCpu,
       memMb: env.snapshotTemplateMemMb
@@ -90,7 +95,6 @@ async function buildTemplateSnapshot(input: {
   network: SimpleNetworkManager;
   agentClient: VsockAgentClient;
   storage: LocalStorageProvider;
-  kernelPath: string;
   version: string;
   cpu: number;
   memMb: number;
@@ -98,7 +102,7 @@ async function buildTemplateSnapshot(input: {
   const templateId = `template-${input.version}`;
   const createdAt = new Date().toISOString();
   const { guestIp, tapName } = await input.network.allocateIp();
-  const { rootfsPath, logsDir } = await input.storage.prepareVmStorage(templateId);
+  const { rootfsPath, logsDir, kernelPath } = await input.storage.prepareVmStorage(templateId);
   const vm = {
     id: templateId,
     state: "CREATED",
@@ -110,6 +114,7 @@ async function buildTemplateSnapshot(input: {
     outboundInternet: false,
     allowIps: [],
     rootfsPath,
+    kernelPath,
     logsDir,
     createdAt
   } as const;
@@ -118,7 +123,7 @@ async function buildTemplateSnapshot(input: {
 
   try {
     await input.network.configure(vm as any, tapName);
-    await input.firecracker.createAndStart(vm as any, rootfsPath, input.kernelPath, tapName);
+    await input.firecracker.createAndStart(vm as any, rootfsPath, kernelPath, tapName);
     await input.agentClient.health(templateId);
     await input.firecracker.createSnapshot(vm as any, { memPath: snapshot.memPath, statePath: snapshot.statePath });
     await fs.writeFile(

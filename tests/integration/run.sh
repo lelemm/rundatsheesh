@@ -85,8 +85,18 @@ CID=$(docker run -d --rm \
   "${DEV_ARGS[@]}" \
   --read-only \
   --security-opt no-new-privileges:true \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=unconfined \
   --cap-drop ALL \
   --cap-add NET_ADMIN \
+  --cap-add SYS_ADMIN \
+  --cap-add SYS_CHROOT \
+  --cap-add SETUID \
+  --cap-add SETGID \
+  --cap-add MKNOD \
+  --cap-add CHOWN \
+  --cap-add DAC_OVERRIDE \
+  --cap-add DAC_READ_SEARCH \
   --tmpfs /tmp \
   --tmpfs /run \
   --sysctl net.ipv4.ip_forward=1 \

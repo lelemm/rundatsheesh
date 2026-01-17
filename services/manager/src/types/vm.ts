@@ -20,6 +20,7 @@ export interface VmRecord {
   outboundInternet: boolean;
   allowIps: string[];
   rootfsPath: string;
+  kernelPath: string;
   logsDir: string;
   createdAt: string;
   provisionMode?: VmProvisionMode;
