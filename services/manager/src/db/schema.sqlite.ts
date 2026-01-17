@@ -28,3 +28,14 @@ export const activityEvents = sqliteTable("activity_events", {
   metaJson: text("meta_json")
 });
 
+export const apiKeys = sqliteTable("api_keys", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  prefix: text("prefix").notNull(),
+  hash: text("hash").notNull(),
+  createdAt: text("created_at").notNull(),
+  expiresAt: text("expires_at"),
+  revokedAt: text("revoked_at"),
+  lastUsedAt: text("last_used_at")
+});
+

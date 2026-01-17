@@ -23,6 +23,7 @@ export function createDb(input: { dialect: DbDialect; sqlitePath: string; databa
       db,
       vms: sqliteSchema.vms,
       activityEvents: sqliteSchema.activityEvents,
+      apiKeys: sqliteSchema.apiKeys,
       close: async () => {
         sqlite.close();
       }
@@ -37,6 +38,7 @@ export function createDb(input: { dialect: DbDialect; sqlitePath: string; databa
     db,
     vms: pgSchema.vms,
     activityEvents: pgSchema.activityEvents,
+    apiKeys: pgSchema.apiKeys,
     close: async () => {
       await pool.end();
     }

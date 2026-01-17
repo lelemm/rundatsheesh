@@ -3,15 +3,19 @@ import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import rateLimit from "@fastify/rate-limit";
 import fastifyStatic from "@fastify/static";
+import cookie from "@fastify/cookie";
 import { authPlugin } from "./api/auth.js";
 import { HttpError } from "./api/httpErrors.js";
 import { apiPlugin } from "./api/routes.js";
 import type { AppDeps } from "./types/deps.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { SessionManager } from "./auth/sessionManager.js";
 
 export interface BuildAppOptions {
   apiKey: string;
+  adminEmail: string;
+  adminPassword: string;
   deps: AppDeps;
 }
 
@@ -121,6 +125,46 @@ export function buildApp(options: BuildAppOptions) {
     }
   });
 
+  app.register(cookie);
+
+  const sessions = new SessionManager();
+  // Expose sessions to other plugins/routes (treated as internal; typed as any).
+  (app as any).sessions = sessions;
+
+  app.post("/auth/login", { bodyLimit: 16 * 1024 }, async (request, reply) => {
+    const body = request.body as { email?: string; password?: string } | undefined;
+    const email = body?.email ?? "";
+    const password = body?.password ?? "";
+    if (email !== options.adminEmail || password !== options.adminPassword) {
+      reply.code(401);
+      return { message: "Invalid credentials" };
+    }
+    const s = sessions.create(email);
+    reply.setCookie("rds_session", s.id, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax"
+    });
+    return { email: s.email };
+  });
+
+  app.post("/auth/logout", async (request, reply) => {
+    const sid = (request.cookies as any)?.rds_session as string | undefined;
+    sessions.revoke(sid);
+    reply.clearCookie("rds_session", { path: "/" });
+    return { ok: true };
+  });
+
+  app.get("/auth/me", async (request, reply) => {
+    const sid = (request.cookies as any)?.rds_session as string | undefined;
+    const s = sessions.get(sid);
+    if (!s) {
+      reply.code(401);
+      return { message: "Unauthorized" };
+    }
+    return { email: s.email };
+  });
+
   // Embedded admin UI (static export) served from `/`.
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = path.dirname(__filename);
@@ -131,6 +175,17 @@ export function buildApp(options: BuildAppOptions) {
     prefix: "/",
     decorateReply: true,
     index: ["index.html"]
+  });
+
+  // Guard console UI: require a session cookie for HTML navigations.
+  app.addHook("onRequest", async (request, reply) => {
+    const url = request.raw.url ?? request.url;
+    if (!url.startsWith("/console")) return;
+    const accept = request.headers["accept"] ?? "";
+    if (typeof accept !== "string" || !accept.includes("text/html")) return;
+    const sid = (request.cookies as any)?.rds_session as string | undefined;
+    if (sessions.get(sid)) return;
+    reply.redirect("/login/");
   });
 
   // SPA-like fallback: serve index.html for non-API, non-doc routes when a file isn't found.
@@ -158,7 +213,7 @@ export function buildApp(options: BuildAppOptions) {
     (_req, body, done) => done(null, body)
   );
 
-  app.register(authPlugin, { apiKey: options.apiKey });
+  app.register(authPlugin, { apiKey: options.apiKey, deps: options.deps });
   app.register(apiPlugin, { deps: options.deps });
 
   return app;

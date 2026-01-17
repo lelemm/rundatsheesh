@@ -4,17 +4,13 @@ import { createContext, useContext, useState, useEffect, type ReactNode } from "
 import { useRouter } from "next/navigation"
 
 interface User {
-  id: string
   email: string
-  name: string
-  avatar?: string
 }
 
 interface AuthContextType {
   user: User | null
   isLoading: boolean
   login: (email: string, password: string) => Promise<void>
-  loginWithOpenId: () => Promise<void>
   logout: () => void
 }
 
@@ -26,58 +22,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter()
 
   useEffect(() => {
-    // Check for existing session (mocked)
-    const storedUser = localStorage.getItem("rds_user")
-    if (storedUser) {
-      setUser(JSON.parse(storedUser))
+    let cancelled = false
+    const run = async () => {
+      try {
+        const res = await fetch("/auth/me", { credentials: "same-origin", cache: "no-store" })
+        if (!res.ok) throw new Error("unauthorized")
+        const data = (await res.json()) as { email: string }
+        if (cancelled) return
+        setUser({ email: data.email })
+      } catch {
+        if (cancelled) return
+        setUser(null)
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
     }
-    setIsLoading(false)
+    run()
+    return () => {
+      cancelled = true
+    }
   }, [])
 
   const login = async (email: string, password: string) => {
-    // Mock login - in production this would call your OpenID provider
     setIsLoading(true)
-    await new Promise((resolve) => setTimeout(resolve, 1000))
-
-    const mockUser: User = {
-      id: "user_1",
-      email,
-      name: email.split("@")[0],
-      avatar: undefined,
+    try {
+      const res = await fetch("/auth/login", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email, password }),
+        credentials: "same-origin",
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => "")
+        throw new Error(text || "Invalid credentials")
+      }
+      const data = (await res.json()) as { email: string }
+      setUser({ email: data.email })
+      router.push("/console")
+    } finally {
+      setIsLoading(false)
     }
-
-    setUser(mockUser)
-    localStorage.setItem("rds_user", JSON.stringify(mockUser))
-    setIsLoading(false)
-    router.push("/console")
   }
 
-  const loginWithOpenId = async () => {
-    // Mock OpenID login - in production this would redirect to your OpenID provider
-    setIsLoading(true)
-    await new Promise((resolve) => setTimeout(resolve, 1500))
-
-    const mockUser: User = {
-      id: "user_oidc_1",
-      email: "developer@company.com",
-      name: "Developer",
-      avatar: undefined,
-    }
-
-    setUser(mockUser)
-    localStorage.setItem("rds_user", JSON.stringify(mockUser))
-    setIsLoading(false)
-    router.push("/console")
-  }
-
-  const logout = () => {
+  const logout = async () => {
     setUser(null)
-    localStorage.removeItem("rds_user")
+    await fetch("/auth/logout", { method: "POST", credentials: "same-origin" }).catch(() => undefined)
     router.push("/")
   }
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, loginWithOpenId, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ user, isLoading, login, logout }}>{children}</AuthContext.Provider>
   )
 }
 

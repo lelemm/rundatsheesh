@@ -66,9 +66,10 @@ function buildTestApp(service: FakeVmService) {
     firecracker: {} as AppDeps["firecracker"],
     network: {} as AppDeps["network"],
     agentClient: {} as AppDeps["agentClient"],
-    storage: {} as AppDeps["storage"]
+    storage: {} as AppDeps["storage"],
+    storageRoot: "/tmp"
   } as unknown as AppDeps;
-  return buildApp({ apiKey, deps });
+  return buildApp({ apiKey, adminEmail: "admin@example.com", adminPassword: "admin", deps });
 }
 
 describe("manager API", () => {

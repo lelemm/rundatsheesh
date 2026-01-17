@@ -70,7 +70,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   }, [])
 
   useEffect(() => {
-    if (!storedApiKey) return
     let cancelled = false
     const run = async () => {
       try {
@@ -139,7 +138,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         <p className="text-muted-foreground text-sm mt-1">Overview of your microVM infrastructure</p>
       </div>
 
-      {!storedApiKey && (
+      {!storedApiKey && !overview && (
         <Card className="bg-card border-border">
           <CardHeader>
             <CardTitle className="text-foreground">API Key required</CardTitle>

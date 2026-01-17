@@ -1,5 +1,7 @@
 export interface EnvConfig {
   apiKey: string;
+  adminEmail: string;
+  adminPassword: string;
   port: number;
   kernelPath: string;
   baseRootfsPath: string;
@@ -50,6 +52,15 @@ export function loadEnv(): EnvConfig {
   const apiKey = process.env.API_KEY ?? "";
   if (!apiKey) {
     throw new Error("API_KEY is required");
+  }
+
+  const adminEmail = process.env.ADMIN_EMAIL ?? "";
+  const adminPassword = process.env.ADMIN_PASSWORD ?? "";
+  if (!adminEmail) {
+    throw new Error("ADMIN_EMAIL is required");
+  }
+  if (!adminPassword) {
+    throw new Error("ADMIN_PASSWORD is required");
   }
 
   const portRaw = process.env.PORT ?? "3000";
@@ -124,6 +135,8 @@ export function loadEnv(): EnvConfig {
 
   return {
     apiKey,
+    adminEmail,
+    adminPassword,
     port,
     kernelPath,
     baseRootfsPath,

@@ -2,7 +2,9 @@
 
 import { cn } from "@/lib/utils"
 import type { View } from "./admin-shell"
-import { LayoutDashboard, Server, Camera, Layers } from "lucide-react"
+import { LayoutDashboard, Server, Camera, Layers, KeyRound } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { useAuth } from "@/lib/auth-context"
 
 interface SidebarProps {
   currentView: View
@@ -14,9 +16,11 @@ const navItems = [
   { id: "vms" as View, label: "Virtual Machines", icon: Server },
   { id: "snapshots" as View, label: "Snapshots", icon: Camera },
   { id: "templates" as View, label: "Templates", icon: Layers },
+  { id: "apiKeys" as View, label: "API Keys", icon: KeyRound },
 ]
 
 export function Sidebar({ currentView, onViewChange }: SidebarProps) {
+  const { user, logout } = useAuth()
   return (
     <div className="w-64 h-full bg-sidebar border-r border-sidebar-border flex flex-col">
       <div className="p-4 border-b border-sidebar-border">
@@ -59,6 +63,19 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
           <div className="w-2 h-2 rounded-full bg-success animate-pulse" />
           <span>API Connected</span>
         </div>
+        {user && (
+          <div className="mt-3 text-xs text-muted-foreground">
+            <div className="truncate">{user.email}</div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="mt-2 w-full justify-start text-muted-foreground hover:text-foreground"
+              onClick={logout}
+            >
+              Sign out
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   )

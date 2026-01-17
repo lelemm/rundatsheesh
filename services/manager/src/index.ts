@@ -11,6 +11,7 @@ import { SqlVmStore } from "./state/sqlVmStore.js";
 import { VmService } from "./services/vmService.js";
 import { ActivityService } from "./telemetry/activityService.js";
 import { initOtel, shutdownOtel } from "./telemetry/otel.js";
+import { ApiKeyService } from "./apiKey/apiKeyService.js";
 import fs from "node:fs/promises";
 import { computeSnapshotVersion } from "./snapshots/snapshotVersion.js";
 
@@ -25,6 +26,7 @@ async function main() {
   await runMigrations({ dialect: db.dialect, db: db.db });
   const store = new SqlVmStore(db.db as any, db.vms as any);
   const activityService = new ActivityService(db.db as any, db.activityEvents as any);
+  const apiKeyService = new ApiKeyService(db.db as any, db.apiKeys as any);
   // After manager restart/recreate, Firecracker processes won't be running.
   // Normalize any transient states so `GET /v1/vms` doesn't claim they're still RUNNING.
   for (const vm of await store.list()) {
@@ -81,7 +83,8 @@ async function main() {
     storage,
     storageRoot: env.storageRoot,
     vmService,
-    activityService
+    activityService,
+    apiKeyService
   };
 
   if (process.argv[2] === "snapshot-build") {
@@ -97,7 +100,7 @@ async function main() {
     return;
   }
 
-  const app = buildApp({ apiKey: env.apiKey, deps });
+  const app = buildApp({ apiKey: env.apiKey, adminEmail: env.adminEmail, adminPassword: env.adminPassword, deps });
   app.listen({ port: env.port, host: "0.0.0.0" }).catch((err) => {
     app.log.error(err, "Failed to start server");
     process.exit(1);

@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -55,6 +55,7 @@ import {
   Play,
   Square,
 } from "lucide-react"
+import { apiGetJson, apiRequestJson, getStoredApiKey } from "@/lib/api"
 
 interface VM {
   id: string
@@ -66,63 +67,95 @@ interface VM {
   snapshotId?: string
 }
 
-const mockVMs: VM[] = [
-  { id: "vm-a8f3c2d1", status: "running", cpu: 2, memMb: 2048, allowInternet: true, createdAt: "2024-01-15T10:30:00Z" },
-  {
-    id: "vm-b7e2f4c3",
-    status: "running",
-    cpu: 4,
-    memMb: 4096,
-    allowInternet: false,
-    createdAt: "2024-01-15T09:15:00Z",
-    snapshotId: "snap-llm-base",
-  },
-  { id: "vm-c6d1e5b4", status: "stopped", cpu: 1, memMb: 1024, allowInternet: true, createdAt: "2024-01-14T16:45:00Z" },
-  { id: "vm-d5c0f6a5", status: "running", cpu: 8, memMb: 8192, allowInternet: true, createdAt: "2024-01-14T14:20:00Z" },
-  {
-    id: "vm-e4b9a7c6",
-    status: "creating",
-    cpu: 2,
-    memMb: 2048,
-    allowInternet: false,
-    createdAt: "2024-01-15T10:35:00Z",
-  },
-]
+interface ApiVm {
+  id: string
+  state: string
+  cpu: number
+  memMb: number
+  outboundInternet: boolean
+  createdAt: string
+}
 
 export function VMsPanel() {
-  const [vms, setVMs] = useState<VM[]>(mockVMs)
+  const [vms, setVMs] = useState<VM[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [selectedVM, setSelectedVM] = useState<VM | null>(null)
   const [newVM, setNewVM] = useState({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "" })
   const [vmToDelete, setVmToDelete] = useState<VM | null>(null)
 
-  const filteredVMs = vms.filter((vm) => vm.id.toLowerCase().includes(searchQuery.toLowerCase()))
+  const apiKey = getStoredApiKey()
 
-  const handleCreateVM = () => {
-    const vm: VM = {
-      id: `vm-${Math.random().toString(36).substring(2, 10)}`,
-      status: "creating",
+  const filteredVMs = useMemo(
+    () => vms.filter((vm) => vm.id.toLowerCase().includes(searchQuery.toLowerCase())),
+    [vms, searchQuery],
+  )
+
+  const toVm = (vm: ApiVm): VM => {
+    const state = vm.state.toUpperCase()
+    const status: VM["status"] =
+      state === "RUNNING" ? "running" : state === "STOPPED" ? "stopped" : "creating"
+    return {
+      id: vm.id,
+      status,
+      cpu: vm.cpu,
+      memMb: vm.memMb,
+      allowInternet: Boolean(vm.outboundInternet),
+      createdAt: vm.createdAt,
+    }
+  }
+
+  const refresh = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const data = await apiGetJson<ApiVm[]>("/v1/vms", apiKey)
+      setVMs(data.map(toVm))
+    } catch (e: any) {
+      setError(String(e?.message ?? e))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    refresh()
+  }, [apiKey])
+
+  const handleCreateVM = async () => {
+    const allowIps = newVM.allowInternet ? ["0.0.0.0/0"] : []
+    const payload: any = {
       cpu: newVM.cpu,
       memMb: newVM.memMb,
-      allowInternet: newVM.allowInternet,
-      createdAt: new Date().toISOString(),
-      snapshotId: newVM.snapshotId || undefined,
+      allowIps,
+      outboundInternet: newVM.allowInternet,
     }
-    setVMs([vm, ...vms])
+    if (newVM.snapshotId) payload.snapshotId = newVM.snapshotId
+    await apiRequestJson("POST", "/v1/vms", apiKey, payload)
     setCreateDialogOpen(false)
     setNewVM({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "" })
+    await refresh()
   }
 
-  const handleDeleteVM = (id: string) => {
-    setVMs(vms.filter((vm) => vm.id !== id))
+  const handleDeleteVM = async (id: string) => {
+    await apiRequestJson("DELETE", `/v1/vms/${id}`, apiKey)
     if (selectedVM?.id === id) setSelectedVM(null)
     setVmToDelete(null)
+    await refresh()
   }
 
-  const handleToggleVM = (id: string, e: React.MouseEvent) => {
+  const handleToggleVM = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
-    setVMs(vms.map((vm) => (vm.id === id ? { ...vm, status: vm.status === "running" ? "stopped" : "running" } : vm)))
+    const vm = vms.find((v) => v.id === id)
+    if (!vm) return
+    if (vm.status === "running") {
+      await apiRequestJson("POST", `/v1/vms/${id}/stop`, apiKey)
+    } else {
+      await apiRequestJson("POST", `/v1/vms/${id}/start`, apiKey)
+    }
+    await refresh()
   }
 
   const getStatusColor = (status: VM["status"]) => {
@@ -288,10 +321,14 @@ export function VMsPanel() {
             variant="outline"
             size="icon"
             className="border-border text-foreground hover:bg-secondary bg-transparent"
+          onClick={refresh}
           >
             <RefreshCw className="w-4 h-4" />
           </Button>
         </div>
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+      {loading && <p className="text-sm text-muted-foreground">Loading VMs…</p>}
 
         <div className="grid gap-3">
           {filteredVMs.map((vm) => (

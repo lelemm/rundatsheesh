@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { apiRequestJson, getStoredApiKey } from "@/lib/api"
 import {
   X,
   Terminal,
@@ -37,6 +38,35 @@ interface VMDetailPanelProps {
   onClose: () => void
 }
 
+interface ExecResult {
+  exitCode: number
+  stdout: string
+  stderr: string
+}
+
+function splitLines(text: string): string[] {
+  const lines = text.split(/\r?\n/)
+  if (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop()
+  }
+  return lines
+}
+
+function formatExecResult(result: ExecResult): string[] {
+  const lines: string[] = []
+  if (result.stdout) {
+    lines.push(...splitLines(result.stdout))
+  }
+  if (result.stderr) {
+    lines.push(...splitLines(result.stderr).map((line) => `[stderr] ${line}`))
+  }
+  if (!result.stdout && !result.stderr) {
+    lines.push("(no output)")
+  }
+  lines.push(`[exit ${result.exitCode}]`)
+  return lines
+}
+
 const mockLogs = `[2024-01-15 10:30:15] VM boot started
 [2024-01-15 10:30:16] Loading kernel...
 [2024-01-15 10:30:17] Kernel loaded successfully
@@ -54,11 +84,29 @@ export function VMDetailPanel({ vm, onClose }: VMDetailPanelProps) {
   const [commandOutput, setCommandOutput] = useState<string[]>([])
   const [uploadPath, setUploadPath] = useState("/home/user/")
   const [downloadPath, setDownloadPath] = useState("")
+  const [isExecuting, setIsExecuting] = useState(false)
 
-  const handleExecuteCommand = () => {
-    if (!command.trim()) return
-    setCommandOutput([...commandOutput, `$ ${command}`, "Command executed successfully", ""])
+  const apiKey = getStoredApiKey()
+
+  const handleExecuteCommand = async () => {
+    const trimmed = command.trim()
+    if (!trimmed || isExecuting) return
+
     setCommand("")
+    setIsExecuting(true)
+    setCommandOutput((prev) => [...prev, `$ ${trimmed}`])
+
+    try {
+      const result = await apiRequestJson<ExecResult>("POST", `/v1/vms/${encodeURIComponent(vm.id)}/exec`, apiKey, {
+        cmd: trimmed,
+      })
+      setCommandOutput((prev) => [...prev, ...formatExecResult(result), ""])
+    } catch (err: any) {
+      const message = String(err?.message ?? err)
+      setCommandOutput((prev) => [...prev, `Error: ${message}`, ""])
+    } finally {
+      setIsExecuting(false)
+    }
   }
 
   return (
@@ -160,6 +208,7 @@ export function VMDetailPanel({ vm, onClose }: VMDetailPanelProps) {
             <Button
               size="icon"
               onClick={handleExecuteCommand}
+              disabled={isExecuting}
               className="bg-primary text-primary-foreground hover:bg-primary/90"
             >
               <Send className="w-4 h-4" />

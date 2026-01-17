@@ -13,6 +13,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     uploadCompressed: 10 * 1024 * 1024
   };
 
+  const sessions = (app as any).sessions as { get: (id?: string | null) => any } | undefined;
+  const requireSession = (request: any, reply: any) => {
+    const sid = request.cookies?.rds_session;
+    if (sessions?.get(sid)) return true;
+    reply.code(401);
+    reply.send({ message: "Unauthorized" });
+    return false;
+  };
+
   app.get(
     "/v1/admin/overview",
     {
@@ -50,6 +59,73 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       const svc = opts.deps.activityService;
       if (!svc) return [];
       return svc.listEvents({ limit });
+    }
+  );
+
+  app.post(
+    "/v1/admin/api-keys",
+    {
+      bodyLimit: BODY_LIMITS.jsonSmall,
+      schema: {
+        summary: "Create API key",
+        tags: ["admin"],
+        body: {
+          type: "object",
+          required: ["name"],
+          properties: {
+            name: { type: "string" },
+            expiresAt: { type: ["string", "null"] }
+          }
+        }
+      }
+    },
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const body = request.body as { name?: string; expiresAt?: string | null } | undefined;
+      const name = (body?.name ?? "").trim();
+      if (!name) {
+        reply.code(400);
+        return { message: "name is required" };
+      }
+      const created = await opts.deps.apiKeyService!.create({ name, expiresAt: body?.expiresAt ?? null });
+      reply.code(201);
+      return { ...created.record, apiKey: created.apiKey };
+    }
+  );
+
+  app.get(
+    "/v1/admin/api-keys",
+    {
+      schema: {
+        summary: "List API keys",
+        tags: ["admin"],
+        response: { 200: { type: "array", items: { type: "object", additionalProperties: true } } }
+      }
+    },
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      return opts.deps.apiKeyService!.list();
+    }
+  );
+
+  app.post(
+    "/v1/admin/api-keys/:id/revoke",
+    {
+      schema: {
+        summary: "Revoke API key",
+        tags: ["admin"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } }
+      }
+    },
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const { id } = request.params as { id: string };
+      const updated = await opts.deps.apiKeyService!.revoke(id);
+      if (!updated) {
+        reply.code(404);
+        return { message: "Not found" };
+      }
+      return updated;
     }
   );
 

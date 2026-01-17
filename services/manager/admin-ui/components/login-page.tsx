@@ -8,23 +8,17 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Separator } from "@/components/ui/separator"
 import { Loader2 } from "lucide-react"
 import { useAuth } from "@/lib/auth-context"
 
 export function LoginPage() {
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
-  const [isEmailLogin, setIsEmailLogin] = useState(false)
-  const { login, loginWithOpenId, isLoading } = useAuth()
+  const { login, isLoading } = useAuth()
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     await login(email, password)
-  }
-
-  const handleOpenIdLogin = async () => {
-    await loginWithOpenId()
   }
 
   return (
@@ -53,27 +47,6 @@ export function LoginPage() {
             <CardDescription>Sign in to access the admin console</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {/* OpenID Login Button */}
-            <Button className="w-full h-11 gap-2" onClick={handleOpenIdLogin} disabled={isLoading}>
-              {isLoading && !isEmailLogin ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <svg className="w-5 h-5" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z" />
-                </svg>
-              )}
-              Continue with OpenID
-            </Button>
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <Separator className="w-full" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-card px-2 text-muted-foreground">Or continue with email</span>
-              </div>
-            </div>
-
             {/* Email Login Form */}
             <form onSubmit={handleEmailLogin} className="space-y-4">
               <div className="space-y-2">
@@ -110,9 +83,8 @@ export function LoginPage() {
                 variant="secondary"
                 className="w-full h-11"
                 disabled={isLoading}
-                onClick={() => setIsEmailLogin(true)}
               >
-                {isLoading && isEmailLogin ? <Loader2 className="w-4 h-4 animate-spin" /> : "Sign in with Email"}
+                {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : "Sign in"}
               </Button>
             </form>
 
@@ -123,13 +95,6 @@ export function LoginPage() {
               </Link>
             </p>
 
-            {/* Mock Notice */}
-            <div className="rounded-lg border border-border bg-muted/30 p-3">
-              <p className="text-xs text-muted-foreground text-center">
-                <span className="text-warning font-medium">Demo Mode:</span> Any credentials will work. OpenID
-                integration coming soon.
-              </p>
-            </div>
           </CardContent>
         </Card>
       </div>

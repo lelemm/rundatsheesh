@@ -6,8 +6,9 @@ import { Dashboard } from "./dashboard"
 import { VMsPanel } from "./vms-panel"
 import { SnapshotsPanel } from "./snapshots-panel"
 import { TemplatesPanel } from "./templates-panel"
+import { ApiKeysPanel } from "./api-keys-panel"
 
-export type View = "dashboard" | "vms" | "snapshots" | "templates"
+export type View = "dashboard" | "vms" | "snapshots" | "templates" | "apiKeys"
 
 export function AdminShell() {
   const [currentView, setCurrentView] = useState<View>("dashboard")
@@ -20,6 +21,7 @@ export function AdminShell() {
         {currentView === "vms" && <VMsPanel />}
         {currentView === "snapshots" && <SnapshotsPanel />}
         {currentView === "templates" && <TemplatesPanel />}
+        {currentView === "apiKeys" && <ApiKeysPanel />}
       </main>
     </div>
   )

@@ -40,7 +40,7 @@ export function LandingPage() {
   -H "Authorization: Bearer $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "command": "python -c \\"print(sum(range(1000)))\\""
+    "command": "node -e \\"console.log([1,2,3,4,5].reduce((a,b)=>a+b,0))\\""
   }'`,
     createSnapshot: `curl -X POST http://localhost:8080/v1/vms/{vm_id}/snapshot \\
   -H "Authorization: Bearer $API_KEY" \\
@@ -48,22 +48,19 @@ export function LandingPage() {
   -d '{
     "snapshot_id": "clean-state-v1"
   }'`,
-    pythonSdk: `from rundatsheesh import Client
+    typescriptSdk: `import { RunDatSheesh } from "rundatsheesh";
 
-client = Client(base_url="http://localhost:8080")
+const client = new RunDatSheesh({ baseUrl: "http://localhost:8080" });
 
-# Create a VM from template
-vm = client.vms.create(template_id="python-3.11")
+// Create a VM
+const vm = await client.vms.create({ cpu: 1, memMb: 512, allowIps: [] });
 
-# Execute code
-result = vm.exec("python script.py")
-print(result.stdout)
+// Run TypeScript inside the VM (Deno)
+const result = await client.vms.runTs(vm.id, { code: "console.log(2 + 2)" });
+console.log(result.stdout);
 
-# Create snapshot
-snapshot = vm.snapshot("checkpoint-1")
-
-# Clean up
-vm.delete()`,
+// Clean up
+await client.vms.destroy(vm.id);`,
     nodeSdk: `import { RunDatSheesh } from 'rundatsheesh';
 
 const client = new RunDatSheesh({ 
@@ -163,7 +160,7 @@ rundatsheesh serve --port 8080`,
             />
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-primary/30 bg-primary/10 text-primary text-sm mb-6">
               <Server className="w-4 h-4" />
-              <span>Self-hosted • Open Source • Sub-100ms VM boot</span>
+              <span>Self-hosted • Open Source</span>
             </div>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-balance mb-6">
               Run <span className="text-primary">Untrusted Code</span> on Your Infrastructure
@@ -223,7 +220,7 @@ rundatsheesh serve --port 8080`,
         </div>
       </section>
 
-      <section className="py-16 border-y border-border/50 bg-muted/20">
+      {/* <section className="py-16 border-y border-border/50 bg-muted/20">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
             <div className="text-center">
@@ -244,7 +241,7 @@ rundatsheesh serve --port 8080`,
             </div>
           </div>
         </div>
-      </section>
+      </section> */}
 
       {/* Features Section */}
       <section id="features" className="py-24 px-4 sm:px-6 lg:px-8">
@@ -382,16 +379,13 @@ rundatsheesh serve --port 8080`,
             </p>
           </div>
 
-          <Tabs defaultValue="curl" className="max-w-4xl mx-auto">
-            <TabsList className="grid w-full grid-cols-3 mb-6">
+            <Tabs defaultValue="curl" className="max-w-4xl mx-auto">
+            <TabsList className="grid w-full grid-cols-2 mb-6">
               <TabsTrigger value="curl" className="gap-2">
                 <Code2 className="w-4 h-4" /> cURL
               </TabsTrigger>
-              <TabsTrigger value="python" className="gap-2">
-                <Code2 className="w-4 h-4" /> Python
-              </TabsTrigger>
               <TabsTrigger value="node" className="gap-2">
-                <Code2 className="w-4 h-4" /> Node.js
+                <Code2 className="w-4 h-4" /> TypeScript
               </TabsTrigger>
             </TabsList>
 
@@ -451,42 +445,22 @@ rundatsheesh serve --port 8080`,
               </div>
             </TabsContent>
 
-            <TabsContent value="python">
-              <div className="rounded-xl border border-border bg-card overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
-                  <span className="text-sm font-medium">Python SDK</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => copyCode(codeExamples.pythonSdk, "python")}
-                  >
-                    <Copy className={`w-3 h-3 mr-1 ${copied === "python" ? "text-success" : ""}`} />
-                    {copied === "python" ? "Copied!" : "Copy"}
-                  </Button>
-                </div>
-                <pre className="p-4 font-mono text-sm overflow-x-auto text-muted-foreground">
-                  <code>{codeExamples.pythonSdk}</code>
-                </pre>
-              </div>
-            </TabsContent>
-
             <TabsContent value="node">
               <div className="rounded-xl border border-border bg-card overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
-                  <span className="text-sm font-medium">Node.js SDK</span>
+                  <span className="text-sm font-medium">TypeScript SDK</span>
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-7 text-xs"
-                    onClick={() => copyCode(codeExamples.nodeSdk, "node")}
+                    onClick={() => copyCode(codeExamples.typescriptSdk, "node")}
                   >
                     <Copy className={`w-3 h-3 mr-1 ${copied === "node" ? "text-success" : ""}`} />
                     {copied === "node" ? "Copied!" : "Copy"}
                   </Button>
                 </div>
                 <pre className="p-4 font-mono text-sm overflow-x-auto text-muted-foreground">
-                  <code>{codeExamples.nodeSdk}</code>
+                  <code>{codeExamples.typescriptSdk}</code>
                 </pre>
               </div>
             </TabsContent>
