@@ -43,7 +43,7 @@ skip_if_missing_vsock() {
 }
 
 compute_dev_args() {
-  DEV_ARGS=(--device /dev/kvm --device /dev/vhost-vsock)
+  DEV_ARGS=(--device /dev/kvm --device /dev/vhost-vsock --device /dev/net/tun)
   if [ -e /dev/vsock ]; then
     DEV_ARGS+=(--device /dev/vsock)
   else
@@ -76,9 +76,22 @@ echo "Building manager docker image..."
 docker build --progress=plain -f "$ROOT_DIR/services/manager/Dockerfile" -t run-dat-sheesh-manager "$ROOT_DIR"
 
 echo "Starting manager container..."
-CID=$(docker run -d --rm --privileged \
+RDS_DATA_DIR="$(mktemp -d)"
+# With `--cap-drop ALL`, even root in the container does NOT have CAP_DAC_OVERRIDE,
+# so bind-mounted host directories must be writable by the container's uid/gid via normal permissions.
+# mktemp defaults to 0700; make it writable like /tmp (world-writable + sticky bit).
+chmod 1777 "$RDS_DATA_DIR"
+CID=$(docker run -d --rm \
   "${DEV_ARGS[@]}" \
+  --read-only \
+  --security-opt no-new-privileges:true \
+  --cap-drop ALL \
   --cap-add NET_ADMIN \
+  --tmpfs /tmp \
+  --tmpfs /run \
+  --sysctl net.ipv4.ip_forward=1 \
+  --sysctl net.ipv4.conf.all.forwarding=1 \
+  --sysctl net.ipv4.conf.default.forwarding=1 \
   -e API_KEY="$API_KEY" \
   -e PORT="$MANAGER_PORT" \
   -e KERNEL_PATH=/artifacts/vmlinux \
@@ -90,7 +103,8 @@ CID=$(docker run -d --rm --privileged \
   -e SNAPSHOT_TEMPLATE_CPU="$SNAPSHOT_TEMPLATE_CPU" \
   -e SNAPSHOT_TEMPLATE_MEM_MB="$SNAPSHOT_TEMPLATE_MEM_MB" \
   -p "${MANAGER_PORT}:${MANAGER_PORT}" \
-  -v "$ROOT_DIR/services/guest-image/dist:/artifacts" \
+  -v "$ROOT_DIR/services/guest-image/dist:/artifacts:ro" \
+  -v "$RDS_DATA_DIR:/var/lib/run-dat-sheesh" \
   run-dat-sheesh-manager)
 
 FAILED=0
@@ -100,6 +114,7 @@ cleanup() {
     docker logs "$CID" || true
   fi
   docker stop "$CID" >/dev/null 2>&1 || true
+  rm -rf "$RDS_DATA_DIR" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 

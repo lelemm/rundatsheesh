@@ -1,0 +1,62 @@
+{
+	# Global options
+	email {$ACME_EMAIL}
+	# Sensible timeouts to mitigate slowloris / hung upstreams
+	servers {
+		timeouts {
+			read_body 30s
+			read_header 10s
+			write 30s
+			idle 60s
+		}
+	}
+}
+
+# Public entrypoint (DNS A/AAAA for {$RDS_DOMAIN} must point to this host)
+{$RDS_DOMAIN} {
+	# Access logs (do NOT log request headers to avoid leaking X-API-Key)
+	log {
+		output file /data/logs/access.log
+		format filter {
+			delete request>headers
+		}
+	}
+
+	# Minimal hardening headers for an API-only service
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# Optional compression (safe for typical JSON + tar.gz responses; gzip output is still binary-safe)
+	encode zstd gzip
+
+	# Edge rate limiting (requires a Caddy build with the `rate_limit` module)
+	rate_limit {
+		zone manager_api {
+			key {remote_host}
+			events 300
+			window 60s
+		}
+	}
+
+	# File upload can be larger; keep bounded.
+	@upload path_regexp upload ^/v1/vms/[^/]+/files/upload$
+	handle @upload {
+		request_body {
+			max_size 100MB
+		}
+		reverse_proxy manager:3000
+	}
+
+	# Everything else should be small JSON (or small binary download requests).
+	handle {
+		request_body {
+			max_size 2MB
+		}
+		reverse_proxy manager:3000
+	}
+}
+
