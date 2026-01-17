@@ -1,11 +1,13 @@
 import { buildApp } from "./app.js";
 import { loadEnv } from "./config/env.js";
+import { createDb } from "./db/index.js";
+import { runMigrations } from "./db/migrate.js";
 import { VsockAgentClient } from "./agentClient/agentClient.js";
 import { FirecrackerManagerImpl } from "./firecracker/firecrackerManager.js";
 import { firecrackerVsockUdsPath } from "./firecracker/socketPaths.js";
 import { SimpleNetworkManager } from "./network/networkManager.js";
 import { LocalStorageProvider } from "./storage/storageProvider.js";
-import { FileVmStore } from "./state/fileVmStore.js";
+import { SqlVmStore } from "./state/sqlVmStore.js";
 import { VmService } from "./services/vmService.js";
 import fs from "node:fs/promises";
 import { computeSnapshotVersion } from "./snapshots/snapshotVersion.js";
@@ -13,7 +15,9 @@ import { computeSnapshotVersion } from "./snapshots/snapshotVersion.js";
 async function main() {
   const env = loadEnv();
 
-  const store = new FileVmStore({ storageRoot: env.storageRoot });
+  const db = createDb({ dialect: env.dbDialect, sqlitePath: env.sqlitePath, databaseUrl: env.databaseUrl });
+  await runMigrations({ dialect: db.dialect, db: db.db });
+  const store = new SqlVmStore(db.db as any, db.vms as any);
   // After manager restart/recreate, Firecracker processes won't be running.
   // Normalize any transient states so `GET /v1/vms` doesn't claim they're still RUNNING.
   for (const vm of await store.list()) {
@@ -88,6 +92,14 @@ async function main() {
     app.log.error(err, "Failed to start server");
     process.exit(1);
   });
+
+  const shutdown = async () => {
+    await db.close().catch(() => undefined);
+    await app.close().catch(() => undefined);
+    process.exit(0);
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
 async function buildTemplateSnapshot(input: {

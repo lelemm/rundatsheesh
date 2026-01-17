@@ -2,12 +2,18 @@
 FROM node:20-bookworm AS builder
 
 WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 COPY services/manager/package.json services/manager/package-lock.json ./
 RUN npm ci
 COPY services/manager/tsconfig.json ./
 COPY services/manager/src ./src
+COPY services/manager/drizzle ./drizzle
+COPY services/manager/drizzle.sqlite.config.ts services/manager/drizzle.pg.config.ts ./
 # Work around sporadic V8/Turbofan crashes during TypeScript compilation in some environments.
 RUN NODE_OPTIONS=--jitless npm run build
+RUN npm prune --omit=dev
 
 FROM node:20-bookworm AS runtime
 
@@ -30,12 +36,15 @@ RUN curl -L "https://github.com/firecracker-microvm/firecracker/releases/downloa
   && chmod +x /usr/local/bin/firecracker /usr/local/bin/jailer
 
 WORKDIR /app
-COPY services/manager/package.json services/manager/package-lock.json ./
-RUN npm ci --omit=dev
+COPY --from=builder /app/package.json /app/package-lock.json ./
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/drizzle ./drizzle
 
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV DB_DIALECT=sqlite
+ENV SQLITE_PATH=/var/lib/run-dat-sheesh/manager.db
 
 RUN mkdir -p /run/fc /var/lib/run-dat-sheesh
 

@@ -4,6 +4,9 @@ export interface EnvConfig {
   kernelPath: string;
   baseRootfsPath: string;
   storageRoot: string;
+  dbDialect: "sqlite" | "postgres";
+  sqlitePath: string;
+  databaseUrl?: string;
   agentVsockPort: number;
   firecrackerBin: string;
   jailer: {
@@ -67,6 +70,19 @@ export function loadEnv(): EnvConfig {
 
   const storageRoot = process.env.STORAGE_ROOT ?? "/var/lib/run-dat-sheesh";
 
+  const dbDialectRaw = (process.env.DB_DIALECT ?? "sqlite").toLowerCase();
+  const dbDialect = (["sqlite", "postgres"] as const).includes(dbDialectRaw as any) ? (dbDialectRaw as "sqlite" | "postgres") : null;
+  if (!dbDialect) {
+    throw new Error("DB_DIALECT must be one of: sqlite, postgres");
+  }
+  // Dev default: keep SQLite DB in-repo under ./db/ so local runs don't require /var/lib paths.
+  // Production (docker) should set SQLITE_PATH explicitly (e.g. /var/lib/run-dat-sheesh/manager.db).
+  const sqlitePath = process.env.SQLITE_PATH ?? "./db/manager.db";
+  const databaseUrl = process.env.DATABASE_URL;
+  if (dbDialect === "postgres" && !databaseUrl) {
+    throw new Error("DATABASE_URL is required when DB_DIALECT=postgres");
+  }
+
   const agentVsockPortRaw = process.env.AGENT_VSOCK_PORT ?? "8080";
   const agentVsockPort = Number(agentVsockPortRaw);
   if (!Number.isFinite(agentVsockPort) || agentVsockPort <= 0) {
@@ -112,6 +128,9 @@ export function loadEnv(): EnvConfig {
     kernelPath,
     baseRootfsPath,
     storageRoot,
+    dbDialect,
+    sqlitePath,
+    databaseUrl,
     agentVsockPort,
     firecrackerBin,
     jailer: {

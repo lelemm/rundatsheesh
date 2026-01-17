@@ -1,0 +1,116 @@
+{
+  "id": "3fd9308c-b11f-4de7-9fbd-9a1d9396920a",
+  "prevId": "00000000-0000-0000-0000-000000000000",
+  "version": "7",
+  "dialect": "postgresql",
+  "tables": {
+    "public.vms": {
+      "name": "vms",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "state": {
+          "name": "state",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "cpu": {
+          "name": "cpu",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "mem_mb": {
+          "name": "mem_mb",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "guest_ip": {
+          "name": "guest_ip",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "tap_name": {
+          "name": "tap_name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "vsock_cid": {
+          "name": "vsock_cid",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "outbound_internet": {
+          "name": "outbound_internet",
+          "type": "boolean",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "allow_ips": {
+          "name": "allow_ips",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "rootfs_path": {
+          "name": "rootfs_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "kernel_path": {
+          "name": "kernel_path",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "logs_dir": {
+          "name": "logs_dir",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "provision_mode": {
+          "name": "provision_mode",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    }
+  },
+  "enums": {},
+  "schemas": {},
+  "sequences": {},
+  "roles": {},
+  "policies": {},
+  "views": {},
+  "_meta": {
+    "columns": {},
+    "schemas": {},
+    "tables": {}
+  }
+}
