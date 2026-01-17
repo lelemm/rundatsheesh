@@ -5,6 +5,8 @@ ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 API_KEY=${API_KEY:-dev-key}
 MANAGER_PORT=${MANAGER_PORT:-3000}
 MANAGER_BASE=${MANAGER_BASE:-http://127.0.0.1:${MANAGER_PORT}}
+ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
+ADMIN_PASSWORD=${ADMIN_PASSWORD:-dev-password}
 ENABLE_SNAPSHOTS=${ENABLE_SNAPSHOTS:-false}
 SNAPSHOT_TEMPLATE_CPU=${SNAPSHOT_TEMPLATE_CPU:-1}
 SNAPSHOT_TEMPLATE_MEM_MB=${SNAPSHOT_TEMPLATE_MEM_MB:-256}
@@ -81,7 +83,7 @@ RDS_DATA_DIR="$(mktemp -d)"
 # so bind-mounted host directories must be writable by the container's uid/gid via normal permissions.
 # mktemp defaults to 0700; make it writable like /tmp (world-writable + sticky bit).
 chmod 1777 "$RDS_DATA_DIR"
-CID=$(docker run -d --rm \
+CID=$(docker run -d \
   "${DEV_ARGS[@]}" \
   --read-only \
   --security-opt no-new-privileges:true \
@@ -103,6 +105,8 @@ CID=$(docker run -d --rm \
   --sysctl net.ipv4.conf.all.forwarding=1 \
   --sysctl net.ipv4.conf.default.forwarding=1 \
   -e API_KEY="$API_KEY" \
+  -e ADMIN_EMAIL="$ADMIN_EMAIL" \
+  -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   -e PORT="$MANAGER_PORT" \
   -e KERNEL_PATH=/artifacts/vmlinux \
   -e BASE_ROOTFS_PATH=/artifacts/rootfs.ext4 \
@@ -124,6 +128,7 @@ cleanup() {
     docker logs "$CID" || true
   fi
   docker stop "$CID" >/dev/null 2>&1 || true
+  docker rm -f "$CID" >/dev/null 2>&1 || true
   rm -rf "$RDS_DATA_DIR" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT

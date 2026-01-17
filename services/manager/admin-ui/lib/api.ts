@@ -21,3 +21,32 @@ export async function apiGetJson<T>(path: string, apiKey: string | null): Promis
   return (await res.json()) as T
 }
 
+export async function apiRequestJson<T>(
+  method: "POST" | "PUT" | "PATCH" | "DELETE",
+  path: string,
+  apiKey: string | null,
+  body?: unknown,
+): Promise<T> {
+  const headers: Record<string, string> = {
+    ...(apiKey ? { "X-API-Key": apiKey } : {}),
+  }
+  if (body !== undefined) {
+    headers["content-type"] = "application/json"
+  }
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    credentials: "same-origin",
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`)
+  }
+  if (res.status === 204) {
+    return undefined as T
+  }
+  return (await res.json()) as T
+}
+
+

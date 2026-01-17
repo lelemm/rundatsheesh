@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { FirecrackerManager } from "../types/interfaces.js";
@@ -29,6 +30,7 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
   async createAndStart(vm: VmRecord, rootfsPath: string, kernelPath: string, tapName: string): Promise<void> {
     const jailRoot = jailerRootDir(this.options.jailerChrootBaseDir, vm.id);
     const apiSockHost = firecrackerApiSocketPath(this.options.jailerChrootBaseDir, vm.id);
+    await fs.rm(apiSockHost, { force: true }).catch(() => undefined);
 
     // Configure Firecracker to write detailed logs/metrics to the VM logs dir.
     const fcLogPath = path.join(vm.logsDir, "firecracker.log");
@@ -186,6 +188,7 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
   ): Promise<void> {
     const jailRoot = jailerRootDir(this.options.jailerChrootBaseDir, vm.id);
     const apiSockHost = firecrackerApiSocketPath(this.options.jailerChrootBaseDir, vm.id);
+    await fs.rm(apiSockHost, { force: true }).catch(() => undefined);
 
     const fcLogPath = path.join(vm.logsDir, "firecracker.log");
     const fcMetricsPath = path.join(vm.logsDir, "firecracker.metrics");
@@ -415,13 +418,28 @@ function generateMac(seed: string) {
 
 async function waitForSocket(socketPath: string, timeoutMs = 5000): Promise<void> {
   const start = Date.now();
+  let lastError: unknown;
   while (Date.now() - start < timeoutMs) {
     try {
       await fs.stat(socketPath);
+      await new Promise<void>((resolve, reject) => {
+        const socket = net.connect({ path: socketPath });
+        const onError = (err: unknown) => {
+          socket.destroy();
+          reject(err);
+        };
+        socket.once("error", onError);
+        socket.once("connect", () => {
+          socket.end();
+          resolve();
+        });
+      });
       return;
-    } catch {
+    } catch (err) {
+      lastError = err;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
-  throw new Error("Firecracker API socket not ready");
+  const suffix = lastError ? ` (${String((lastError as any)?.message ?? lastError)})` : "";
+  throw new Error(`Firecracker API socket not ready${suffix}`);
 }

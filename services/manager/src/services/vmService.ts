@@ -370,16 +370,28 @@ export class VmService {
 
   async destroy(id: string): Promise<void> {
     const vm = await this.requireVm(id);
-    await this.firecracker.destroy(vm);
-    await this.network.teardown(vm, vm.tapName);
-    await this.storage.cleanupVmStorage(vm.id);
+    const errors: string[] = [];
+    await this.firecracker
+      .destroy(vm)
+      .catch((err) => errors.push(`firecracker.destroy: ${String((err as any)?.message ?? err)}`));
+    await this.network
+      .teardown(vm, vm.tapName)
+      .catch((err) => errors.push(`network.teardown: ${String((err as any)?.message ?? err)}`));
+    await this.storage
+      .cleanupVmStorage(vm.id)
+      .catch((err) => errors.push(`storage.cleanup: ${String((err as any)?.message ?? err)}`));
     await this.store.update(vm.id, { state: "DELETED" });
     await this.activity?.logEvent({
       type: "vm.deleted",
       entityType: "vm",
       entityId: vm.id,
-      message: "VM deleted"
+      message: "VM deleted",
+      meta: errors.length ? { warnings: errors } : undefined
     });
+    if (errors.length) {
+      // eslint-disable-next-line no-console
+      console.warn("[vm-destroy] Completed with warnings", { vmId: vm.id, errors });
+    }
   }
 
   async exec(id: string, payload: { cmd: string; cwd?: string; env?: Record<string, string>; timeoutMs?: number }) {
