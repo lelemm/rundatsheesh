@@ -6,6 +6,12 @@ export interface ApiPluginOptions {
 }
 
 export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts) => {
+  const BODY_LIMITS = {
+    jsonSmall: 64 * 1024,
+    jsonMedium: 1024 * 1024,
+    uploadCompressed: 10 * 1024 * 1024
+  };
+
   app.get(
     "/v1/snapshots",
     {
@@ -101,6 +107,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
   app.post(
     "/v1/vms",
     {
+      bodyLimit: BODY_LIMITS.jsonSmall,
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
       schema: {
         summary: "Create VM",
         description:
@@ -241,6 +249,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
   app.post(
     "/v1/vms/:id/exec",
     {
+      bodyLimit: BODY_LIMITS.jsonMedium,
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       schema: {
         summary: "Execute command",
         description: "Executes a shell command inside the VM as uid/gid 1000, confined to /home/user.",
@@ -314,6 +324,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
   app.post(
     "/v1/vms/:id/run-ts",
     {
+      bodyLimit: BODY_LIMITS.jsonMedium,
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       schema: {
         summary: "Run TypeScript (Deno)",
         description:
@@ -385,6 +397,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
   app.post(
     "/v1/vms/:id/files/upload",
     {
+      bodyLimit: BODY_LIMITS.uploadCompressed,
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
       schema: {
         summary: "Upload files (tar.gz)",
         description:
@@ -445,6 +459,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
   app.get(
     "/v1/vms/:id/files/download",
     {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       schema: {
         summary: "Download files (tar.gz)",
         description: "Downloads a directory tree as a tar.gz archive. Path must be confined to /home/user.",

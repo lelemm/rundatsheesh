@@ -10,7 +10,11 @@ export interface BuildAppOptions {
 }
 
 export function buildApp(options: BuildAppOptions) {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    // Default small limit; routes can override (e.g., tar uploads).
+    bodyLimit: 256 * 1024,
+    logger: true
+  });
 
   // The manager uploads/downloads files as tar.gz streams. Fastify returns 415 unless we
   // register a parser for the content-types we expect.

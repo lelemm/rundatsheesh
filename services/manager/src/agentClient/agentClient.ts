@@ -10,6 +10,9 @@ import { execVsockUdsRaw } from "./vsockTransport.js";
 export interface VsockAgentOptions {
   agentPort: number;
   vsockUdsDir?: string;
+  retry?: { attempts: number; delayMs: number };
+  limits?: { maxJsonResponseBytes: number; maxBinaryResponseBytes: number };
+  timeouts?: { defaultMs: number; healthMs: number; binaryMs: number };
 }
 
 export class VsockAgentClient implements AgentClient {
@@ -19,7 +22,7 @@ export class VsockAgentClient implements AgentClient {
   constructor(private readonly options: VsockAgentOptions) {}
 
   async health(vmId: string): Promise<void> {
-    await this.request(vmId, "GET", "/health");
+    await this.request(vmId, "GET", "/health", undefined, { timeoutMs: this.options.timeouts?.healthMs });
   }
 
   async applyAllowlist(vmId: string, allowIps: string[], outboundInternet: boolean): Promise<void> {
@@ -34,11 +37,13 @@ export class VsockAgentClient implements AgentClient {
   }
 
   async exec(vmId: string, payload: VmExecRequest): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    return this.request(vmId, "POST", "/exec", payload);
+    const timeoutMs = typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined;
+    return this.request(vmId, "POST", "/exec", payload, { timeoutMs });
   }
 
   async runTs(vmId: string, payload: VmRunTsRequest): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-    return this.request(vmId, "POST", "/run-ts", payload);
+    const timeoutMs = typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined;
+    return this.request(vmId, "POST", "/run-ts", payload, { timeoutMs });
   }
 
   async upload(vmId: string, dest: string, data: Buffer): Promise<void> {
@@ -49,9 +54,19 @@ export class VsockAgentClient implements AgentClient {
     return this.requestBinary(vmId, "GET", `/files/download?path=${encodeURIComponent(path)}`);
   }
 
-  private async request<T>(vmId: string, method: string, pathName: string, body?: T): Promise<any> {
+  private async request<T>(
+    vmId: string,
+    method: string,
+    pathName: string,
+    body?: T,
+    opts?: { timeoutMs?: number }
+  ): Promise<any> {
     await this.ensureVsockDevice();
-    const response = await this.execVsockUdsWithRetry(vmId, buildJsonRequest(method, pathName, body));
+    const maxBytes = this.options.limits?.maxJsonResponseBytes ?? 2_000_000;
+    const response = await this.execVsockUdsWithRetry(vmId, buildJsonRequest(method, pathName, body), {
+      timeoutMs: this.computeTimeoutMs(opts?.timeoutMs),
+      maxResponseBytes: maxBytes
+    });
     const parsed = parseHttpResponse(response.stdout);
     const { statusCode, body: responseBody, headers } = parsed;
 
@@ -97,7 +112,11 @@ export class VsockAgentClient implements AgentClient {
 
   private async requestBinary(vmId: string, method: string, pathName: string, body?: Buffer): Promise<Buffer> {
     await this.ensureVsockDevice();
-    const response = await this.execVsockUdsWithRetry(vmId, buildBinaryRequest(method, pathName, body));
+    const maxBytes = this.options.limits?.maxBinaryResponseBytes ?? 50_000_000;
+    const response = await this.execVsockUdsWithRetry(vmId, buildBinaryRequest(method, pathName, body), {
+      timeoutMs: this.options.timeouts?.binaryMs ?? this.options.timeouts?.defaultMs,
+      maxResponseBytes: maxBytes
+    });
     const { statusCode, body: responseBody } = parseHttpResponse(response.stdout);
     if (!statusCode) {
       throw new Error(`Agent request returned no HTTP response (${method} ${pathName})`);
@@ -110,13 +129,16 @@ export class VsockAgentClient implements AgentClient {
 
   private async execVsockUdsWithRetry(
     vmId: string,
-    requestPayload: Buffer
+    requestPayload: Buffer,
+    opts?: { timeoutMs?: number; maxResponseBytes?: number }
   ): Promise<{ stdout: Buffer; stderr: Buffer; exitCode: number | null }> {
-    const attempts = 150;
-    const delayMs = 200;
+    const attempts = this.options.retry?.attempts ?? 150;
+    const delayMs = this.options.retry?.delayMs ?? 200;
+    const timeoutMs = opts?.timeoutMs ?? this.options.timeouts?.defaultMs ?? 15000;
+    const maxResponseBytes = opts?.maxResponseBytes;
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
       const response = await execVsockUdsRaw(
-        { udsPath: this.vsockUdsPath(vmId), agentPort: this.options.agentPort, timeoutMs: 15000 },
+        { udsPath: this.vsockUdsPath(vmId), agentPort: this.options.agentPort, timeoutMs, maxResponseBytes },
         requestPayload
       );
       if (!shouldRetryVsock(attempt, attempts, response.stdout, response.stderr, response.exitCode)) {
@@ -124,7 +146,21 @@ export class VsockAgentClient implements AgentClient {
       }
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
-    return execVsockUdsRaw({ udsPath: this.vsockUdsPath(vmId), agentPort: this.options.agentPort, timeoutMs: 15000 }, requestPayload);
+    return execVsockUdsRaw(
+      { udsPath: this.vsockUdsPath(vmId), agentPort: this.options.agentPort, timeoutMs, maxResponseBytes },
+      requestPayload
+    );
+  }
+
+  private computeTimeoutMs(requestTimeoutMs?: number): number {
+    // For long-running exec/run-ts, the agent won't respond until the command completes.
+    // So we must allow a timeout >= requested timeout (+ small overhead).
+    const base = this.options.timeouts?.defaultMs ?? 15000;
+    if (typeof requestTimeoutMs !== "number" || !Number.isFinite(requestTimeoutMs) || requestTimeoutMs <= 0) {
+      return base;
+    }
+    const overheadMs = 5_000;
+    return Math.max(base, Math.min(requestTimeoutMs + overheadMs, 5 * 60_000));
   }
 
   private async ensureVsockDevice(): Promise<void> {

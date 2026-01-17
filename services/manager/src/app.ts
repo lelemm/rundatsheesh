@@ -1,7 +1,9 @@
 import Fastify from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
+import rateLimit from "@fastify/rate-limit";
 import { authPlugin } from "./api/auth.js";
+import { HttpError } from "./api/httpErrors.js";
 import { apiPlugin } from "./api/routes.js";
 import type { AppDeps } from "./types/deps.js";
 
@@ -11,7 +13,52 @@ export interface BuildAppOptions {
 }
 
 export function buildApp(options: BuildAppOptions) {
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    // Keep JSON bodies reasonably small by default; override per-route where needed.
+    bodyLimit: 256 * 1024,
+    logger: {
+      // Redact API keys from logs (request/response objects can vary slightly by serializer).
+      redact: {
+        paths: [
+          "req.headers.x-api-key",
+          'req.headers["x-api-key"]',
+          "request.headers.x-api-key",
+          'request.headers["x-api-key"]'
+        ],
+        remove: true
+      }
+    }
+  });
+
+  app.setErrorHandler(async (err, request, reply) => {
+    const statusCode = typeof (err as any)?.statusCode === "number" ? (err as any).statusCode : 500;
+
+    if (err instanceof HttpError) {
+      reply.code(err.statusCode);
+      return reply.send({ message: err.message });
+    }
+
+    if (statusCode >= 400 && statusCode < 500) {
+      // Preserve Fastify's client error codes (e.g., 413 body limit, 429 rate limit).
+      reply.code(statusCode);
+      return reply.send({ message: err.message });
+    }
+
+    request.log.error({ err }, "Request failed");
+    reply.code(500);
+    return reply.send({ message: "Internal Server Error" });
+  });
+
+  app.register(rateLimit, {
+    global: true,
+    // Conservative defaults; can be tuned later or made env-configurable as needed.
+    max: 120,
+    timeWindow: "1 minute",
+    allowList: (req) => {
+      const url = req.raw.url ?? req.url;
+      return url === "/openapi.json" || url.startsWith("/docs");
+    }
+  });
 
   app.register(swagger, {
     openapi: {

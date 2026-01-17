@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type { AgentClient, FirecrackerManager, NetworkManager, StorageProvider, VmStore } from "../types/interfaces.js";
 import type { VmCreateRequest, VmProvisionMode, VmPublic, VmRecord } from "../types/vm.js";
 import type { SnapshotMeta } from "../types/snapshot.js";
+import { HttpError } from "../api/httpErrors.js";
 
 export interface VmServiceOptions {
   store: VmStore;
@@ -13,6 +14,14 @@ export interface VmServiceOptions {
   kernelPath: string;
   snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   vsockCidStart?: number;
+  limits?: {
+    maxVms: number;
+    maxCpu: number;
+    maxMemMb: number;
+    maxAllowIps: number;
+    maxExecTimeoutMs: number;
+    maxRunTsTimeoutMs: number;
+  };
 }
 
 export class VmService {
@@ -23,6 +32,7 @@ export class VmService {
   private readonly storage: StorageProvider;
   private readonly kernelPath: string;
   private readonly snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
+  private readonly limits: NonNullable<VmServiceOptions["limits"]>;
   private nextVsockCid: number;
 
   constructor(options: VmServiceOptions) {
@@ -33,6 +43,14 @@ export class VmService {
     this.storage = options.storage;
     this.kernelPath = options.kernelPath;
     this.snapshots = options.snapshots;
+    this.limits = options.limits ?? {
+      maxVms: 20,
+      maxCpu: 4,
+      maxMemMb: 2048,
+      maxAllowIps: 64,
+      maxExecTimeoutMs: 120_000,
+      maxRunTsTimeoutMs: 120_000
+    };
     this.nextVsockCid = options.vsockCidStart ?? 5000;
   }
 
@@ -47,6 +65,12 @@ export class VmService {
   }
 
   async create(request: VmCreateRequest): Promise<VmPublic> {
+    validateCreateRequest(request, this.limits);
+    const active = (await this.store.list()).filter((vm) => vm.state !== "DELETED");
+    if (active.length >= this.limits.maxVms) {
+      throw new HttpError(429, `VM quota exceeded (maxVms=${this.limits.maxVms})`);
+    }
+
     const tTotalStart = Date.now();
     const id = randomUUID();
     const createdAt = new Date().toISOString();
@@ -308,11 +332,17 @@ export class VmService {
 
   async exec(id: string, payload: { cmd: string; cwd?: string; env?: Record<string, string>; timeoutMs?: number }) {
     const vm = await this.requireVm(id);
+    if (typeof payload.timeoutMs === "number" && payload.timeoutMs > this.limits.maxExecTimeoutMs) {
+      throw new HttpError(400, `timeoutMs exceeds maxExecTimeoutMs=${this.limits.maxExecTimeoutMs}`);
+    }
     return this.agentClient.exec(vm.id, payload);
   }
 
   async runTs(id: string, payload: { path?: string; code?: string; args?: string[]; denoFlags?: string[]; timeoutMs?: number }) {
     const vm = await this.requireVm(id);
+    if (typeof payload.timeoutMs === "number" && payload.timeoutMs > this.limits.maxRunTsTimeoutMs) {
+      throw new HttpError(400, `timeoutMs exceeds maxRunTsTimeoutMs=${this.limits.maxRunTsTimeoutMs}`);
+    }
     return this.agentClient.runTs(vm.id, { ...payload, allowNet: vm.outboundInternet });
   }
 
@@ -338,6 +368,26 @@ export class VmService {
     const cid = this.nextVsockCid;
     this.nextVsockCid += 1;
     return cid;
+  }
+}
+
+function validateCreateRequest(req: VmCreateRequest, limits: VmService["limits"]): void {
+  if (!Number.isFinite(req.cpu) || req.cpu <= 0 || req.cpu > limits.maxCpu) {
+    throw new HttpError(400, `Invalid cpu (maxCpu=${limits.maxCpu})`);
+  }
+  if (!Number.isFinite(req.memMb) || req.memMb <= 0 || req.memMb > limits.maxMemMb) {
+    throw new HttpError(400, `Invalid memMb (maxMemMb=${limits.maxMemMb})`);
+  }
+  if (!Array.isArray(req.allowIps)) {
+    throw new HttpError(400, "allowIps must be an array");
+  }
+  if (req.allowIps.length > limits.maxAllowIps) {
+    throw new HttpError(400, `Too many allowIps (maxAllowIps=${limits.maxAllowIps})`);
+  }
+  for (const ip of req.allowIps) {
+    if (typeof ip !== "string" || ip.length === 0 || ip.length > 128) {
+      throw new HttpError(400, "Invalid allowIps entry");
+    }
   }
 }
 

@@ -25,7 +25,13 @@ async function main() {
     apiSocketDir: "/run/fc"
   });
   const network = new SimpleNetworkManager({ subnetCidr: "172.16.0.0/24", gatewayIp: "172.16.0.1" });
-  const agentClient = new VsockAgentClient({ agentPort: env.agentVsockPort, vsockUdsDir: "/run/fc" });
+  const agentClient = new VsockAgentClient({
+    agentPort: env.agentVsockPort,
+    vsockUdsDir: "/run/fc",
+    retry: { attempts: env.vsock.retryAttempts, delayMs: env.vsock.retryDelayMs },
+    timeouts: { defaultMs: env.vsock.timeoutMs, healthMs: env.vsock.healthTimeoutMs, binaryMs: env.vsock.binaryTimeoutMs },
+    limits: { maxJsonResponseBytes: env.vsock.maxJsonResponseBytes, maxBinaryResponseBytes: env.vsock.maxBinaryResponseBytes }
+  });
   const storage = new LocalStorageProvider({
     baseRootfsPath: env.baseRootfsPath,
     storageRoot: env.storageRoot,
@@ -43,6 +49,7 @@ async function main() {
     agentClient,
     storage,
     kernelPath: env.kernelPath,
+    limits: env.limits,
     snapshots: env.enableSnapshots
       ? { enabled: true, version: snapshotVersion, templateCpu: env.snapshotTemplateCpu, templateMemMb: env.snapshotTemplateMemMb }
       : undefined

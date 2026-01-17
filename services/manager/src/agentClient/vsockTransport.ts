@@ -1,4 +1,5 @@
 import net from "node:net";
+import { HTTPParser } from "http-parser-js";
 
 export interface VsockRawResult {
   stdout: Buffer;
@@ -10,6 +11,12 @@ export interface VsockTransportOptions {
   udsPath: string;
   agentPort: number;
   timeoutMs?: number;
+  /**
+   * Hard cap on total bytes read from the vsock stream (handshake + HTTP).
+   * Prevents unbounded memory growth if the guest misbehaves or an attacker
+   * can influence response size.
+   */
+  maxResponseBytes?: number;
 }
 
 export function execVsockUdsRaw(options: VsockTransportOptions, requestPayload: Buffer): Promise<VsockRawResult> {
@@ -19,10 +26,29 @@ export function execVsockUdsRaw(options: VsockTransportOptions, requestPayload: 
     const stderrChunks: Buffer[] = [];
 
     const timeoutMs = options.timeoutMs ?? 15000;
+    const maxResponseBytes = options.maxResponseBytes ?? 2_000_000;
     socket.setTimeout(timeoutMs);
 
     let sentRequest = false;
     let handshakeBuffer = Buffer.alloc(0);
+    let forcedError: string | null = null;
+
+    // Once the HTTP response is complete, proactively close the socket instead of waiting
+    // for the server side to close it. This avoids cases where we read a partial response
+    // and hang/timeout waiting for close.
+    let parserStarted = false;
+    let messageComplete = false;
+    let httpSearchBuf = Buffer.alloc(0);
+    const httpMarker = Buffer.from("HTTP/");
+    const parser = new HTTPParser(HTTPParser.RESPONSE);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (parser as any)[HTTPParser.kOnMessageComplete] = () => {
+      messageComplete = true;
+      // Destroy immediately; response framing tells us we've got the full message.
+      socket.destroy();
+    };
+
+    let totalBytes = 0;
 
     socket.on("connect", () => {
       // Firecracker vsock host-side is a Unix socket. It expects a small handshake:
@@ -33,6 +59,13 @@ export function execVsockUdsRaw(options: VsockTransportOptions, requestPayload: 
 
     socket.on("data", (chunk) => {
       const buf = Buffer.from(chunk);
+      totalBytes += buf.length;
+      if (!forcedError && totalBytes > maxResponseBytes) {
+        forcedError = `vsock response exceeded maxResponseBytes=${maxResponseBytes}`;
+        stderrChunks.push(Buffer.from(forcedError));
+        socket.destroy();
+        return;
+      }
 
       // If we haven't sent the HTTP request yet, treat the first line as the handshake.
       if (!sentRequest) {
@@ -67,6 +100,42 @@ export function execVsockUdsRaw(options: VsockTransportOptions, requestPayload: 
       }
 
       stdoutChunks.push(buf);
+
+      // Start parsing once we see the beginning of an HTTP response. We can't assume
+      // the response begins at the first post-handshake byte (socat/bridge quirks),
+      // so scan for the marker across chunk boundaries.
+      if (!parserStarted) {
+        httpSearchBuf = Buffer.concat([httpSearchBuf, buf]);
+        const idx = httpSearchBuf.indexOf(httpMarker);
+        if (idx === -1) {
+          // Keep a small tail so the marker can match across boundaries.
+          if (httpSearchBuf.length > httpMarker.length) {
+            httpSearchBuf = httpSearchBuf.subarray(httpSearchBuf.length - (httpMarker.length - 1));
+          }
+          return;
+        }
+        parserStarted = true;
+        const httpPart = httpSearchBuf.subarray(idx);
+        httpSearchBuf = Buffer.alloc(0);
+        try {
+          parser.execute(httpPart);
+        } catch (err) {
+          forcedError = `http parse error: ${String((err as any)?.message ?? err)}`;
+          stderrChunks.push(Buffer.from(forcedError));
+          socket.destroy();
+        }
+        return;
+      }
+
+      if (!messageComplete) {
+        try {
+          parser.execute(buf);
+        } catch (err) {
+          forcedError = `http parse error: ${String((err as any)?.message ?? err)}`;
+          stderrChunks.push(Buffer.from(forcedError));
+          socket.destroy();
+        }
+      }
     });
 
     socket.on("timeout", () => {
@@ -85,7 +154,7 @@ export function execVsockUdsRaw(options: VsockTransportOptions, requestPayload: 
       resolve({
         stdout: Buffer.concat(stdoutChunks),
         stderr: Buffer.concat(stderrChunks),
-        exitCode: hadError ? 1 : 0
+        exitCode: hadError || forcedError ? 1 : 0
       });
     });
   });

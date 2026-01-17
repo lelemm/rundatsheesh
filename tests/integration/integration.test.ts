@@ -237,6 +237,17 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     expect(status).toBe(204);
   });
 
+  it("files: oversized upload is rejected (413)", async () => {
+    // Manager upload bodyLimit is 10MB (compressed). Send >10MB of bytes.
+    const big = new Uint8Array(11 * 1024 * 1024);
+    const { status } = await apiBinary(
+      "POST",
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user/project")}`,
+      big
+    );
+    expect(status).toBe(413);
+  });
+
   it("files: upload is rejected outside /home/user", async () => {
     const { status } = await apiBinary(
       "POST",

@@ -14,7 +14,9 @@ const app = buildApp({
   networkConfigurator: new IpNetworkConfigurator()
 });
 
-app.listen({ port: env.port, host: "0.0.0.0" }).catch((err) => {
+// The guest agent is accessed via the vsock->TCP bridge (socat) on guest loopback.
+// Binding to 127.0.0.1 reduces exposure on the guest network interface.
+app.listen({ port: env.port, host: "127.0.0.1" }).catch((err) => {
   app.log.error(err, "Failed to start guest agent");
   process.exit(1);
 });

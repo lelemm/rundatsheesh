@@ -11,9 +11,14 @@ export interface ApiPluginOptions {
 }
 
 export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts) => {
+  const BODY_LIMITS = {
+    json: 256 * 1024,
+    uploadCompressed: 10 * 1024 * 1024
+  };
+
   app.get("/health", async () => ({ status: "ok" }));
 
-  app.post("/firewall/allowlist", async (request, reply) => {
+  app.post("/firewall/allowlist", { bodyLimit: BODY_LIMITS.json }, async (request, reply) => {
     const body = request.body as { allowIps?: string[]; outboundInternet?: boolean };
     const allowIps = body?.allowIps ?? [];
     const outboundInternet = Boolean(body?.outboundInternet);
@@ -21,23 +26,23 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     reply.code(204);
   });
 
-  app.post("/net/config", async (request, reply) => {
+  app.post("/net/config", { bodyLimit: BODY_LIMITS.json }, async (request, reply) => {
     const payload = request.body as NetConfigRequest;
     await opts.networkConfigurator.configure(payload);
     reply.code(204);
   });
 
-  app.post("/exec", async (request) => {
+  app.post("/exec", { bodyLimit: BODY_LIMITS.json }, async (request) => {
     const payload = request.body as ExecRequest;
     return opts.execRunner.exec(payload);
   });
 
-  app.post("/run-ts", async (request) => {
+  app.post("/run-ts", { bodyLimit: BODY_LIMITS.json }, async (request) => {
     const payload = request.body as RunTsRequest;
     return opts.execRunner.runTs(payload);
   });
 
-  app.post("/files/upload", async (request, reply) => {
+  app.post("/files/upload", { bodyLimit: BODY_LIMITS.uploadCompressed }, async (request, reply) => {
     const dest = (request.query as { dest?: string }).dest ?? "";
     if (!dest) {
       reply.code(400);

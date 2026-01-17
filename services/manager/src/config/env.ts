@@ -10,9 +10,34 @@ export interface EnvConfig {
   enableSnapshots: boolean;
   snapshotTemplateCpu: number;
   snapshotTemplateMemMb: number;
+  limits: {
+    maxVms: number;
+    maxCpu: number;
+    maxMemMb: number;
+    maxAllowIps: number;
+    maxExecTimeoutMs: number;
+    maxRunTsTimeoutMs: number;
+  };
+  vsock: {
+    retryAttempts: number;
+    retryDelayMs: number;
+    timeoutMs: number;
+    healthTimeoutMs: number;
+    binaryTimeoutMs: number;
+    maxJsonResponseBytes: number;
+    maxBinaryResponseBytes: number;
+  };
 }
 
 export function loadEnv(): EnvConfig {
+  const parsePositiveInt = (raw: string | undefined, name: string, fallback: number) => {
+    const n = Number(raw ?? String(fallback));
+    if (!Number.isFinite(n) || n <= 0) {
+      throw new Error(`${name} must be a positive number`);
+    }
+    return Math.floor(n);
+  };
+
   const apiKey = process.env.API_KEY ?? "";
   if (!apiKey) {
     throw new Error("API_KEY is required");
@@ -77,6 +102,23 @@ export function loadEnv(): EnvConfig {
     rootfsCloneMode,
     enableSnapshots,
     snapshotTemplateCpu,
-    snapshotTemplateMemMb
+    snapshotTemplateMemMb,
+    limits: {
+      maxVms: parsePositiveInt(process.env.MAX_VMS, "MAX_VMS", 20),
+      maxCpu: parsePositiveInt(process.env.MAX_CPU, "MAX_CPU", 4),
+      maxMemMb: parsePositiveInt(process.env.MAX_MEM_MB, "MAX_MEM_MB", 2048),
+      maxAllowIps: parsePositiveInt(process.env.MAX_ALLOW_IPS, "MAX_ALLOW_IPS", 64),
+      maxExecTimeoutMs: parsePositiveInt(process.env.MAX_EXEC_TIMEOUT_MS, "MAX_EXEC_TIMEOUT_MS", 120_000),
+      maxRunTsTimeoutMs: parsePositiveInt(process.env.MAX_RUNTS_TIMEOUT_MS, "MAX_RUNTS_TIMEOUT_MS", 120_000)
+    },
+    vsock: {
+      retryAttempts: parsePositiveInt(process.env.VSOCK_RETRY_ATTEMPTS, "VSOCK_RETRY_ATTEMPTS", 30),
+      retryDelayMs: parsePositiveInt(process.env.VSOCK_RETRY_DELAY_MS, "VSOCK_RETRY_DELAY_MS", 100),
+      timeoutMs: parsePositiveInt(process.env.VSOCK_TIMEOUT_MS, "VSOCK_TIMEOUT_MS", 15_000),
+      healthTimeoutMs: parsePositiveInt(process.env.VSOCK_HEALTH_TIMEOUT_MS, "VSOCK_HEALTH_TIMEOUT_MS", 15_000),
+      binaryTimeoutMs: parsePositiveInt(process.env.VSOCK_BINARY_TIMEOUT_MS, "VSOCK_BINARY_TIMEOUT_MS", 30_000),
+      maxJsonResponseBytes: parsePositiveInt(process.env.VSOCK_MAX_JSON_RESPONSE_BYTES, "VSOCK_MAX_JSON_RESPONSE_BYTES", 2_000_000),
+      maxBinaryResponseBytes: parsePositiveInt(process.env.VSOCK_MAX_BINARY_RESPONSE_BYTES, "VSOCK_MAX_BINARY_RESPONSE_BYTES", 50_000_000)
+    }
   };
 }
