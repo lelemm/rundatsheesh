@@ -1,0 +1,5 @@
+<svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Run Dat sheesh">
+  <rect x="8" y="12" width="48" height="40" rx="8" fill="#111827"/>
+  <path d="M20 24h24M20 32h18M20 40h12" stroke="#F9FAFB" stroke-width="4" stroke-linecap="round"/>
+</svg>
+

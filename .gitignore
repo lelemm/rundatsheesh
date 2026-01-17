@@ -1,0 +1,17 @@
+node_modules/
+dist/
+services/manager/dist/
+services/guest-agent/dist/
+services/guest-image/dist/
+services/manager/run-data/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+.env.*
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

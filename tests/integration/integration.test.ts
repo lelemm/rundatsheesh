@@ -1,0 +1,342 @@
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+
+const API_KEY = process.env.API_KEY ?? "dev-key";
+const MANAGER_BASE = process.env.MANAGER_BASE ?? "http://127.0.0.1:3000";
+const MAX_CREATE_MS = process.env.MAX_CREATE_MS ? Number(process.env.MAX_CREATE_MS) : null;
+const ENABLE_SNAPSHOTS = (process.env.ENABLE_SNAPSHOTS ?? "false").toLowerCase() === "true";
+
+function mustExec(cmd: string, args: string[], opts?: { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: "inherit" | "pipe" }) {
+  return execFileSync(cmd, args, {
+    cwd: opts?.cwd,
+    env: opts?.env,
+    stdio: (opts?.stdio ?? "inherit") as any
+  });
+}
+
+async function waitForManager(): Promise<void> {
+  for (let i = 0; i < 60; i += 1) {
+    try {
+      const res = await fetch(`${MANAGER_BASE}/v1/vms`, { headers: { "X-API-Key": API_KEY } });
+      if (res.ok) return;
+    } catch {
+      // ignore
+    }
+    await delay(1000);
+  }
+  throw new Error("Manager did not become ready");
+}
+
+async function apiJson<T>(method: string, url: string, body?: unknown): Promise<{ status: number; json: T }> {
+  const res = await fetch(url, {
+    method,
+    headers: { "X-API-Key": API_KEY, "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const text = await res.text();
+  const json = text ? (JSON.parse(text) as T) : ({} as T);
+  return { status: res.status, json };
+}
+
+async function apiBinary(method: string, url: string, body?: Uint8Array): Promise<{ status: number; buf: Buffer }> {
+  const res = await fetch(url, {
+    method,
+    headers: { "X-API-Key": API_KEY, "Content-Type": "application/gzip" },
+    // Node's fetch supports Uint8Array, but lib.dom types can be picky depending on TS config.
+    body: body as any
+  });
+  const ab = await res.arrayBuffer();
+  return { status: res.status, buf: Buffer.from(ab) };
+}
+
+type ExecResult = { exitCode: number; stdout: string; stderr: string };
+type VmPublic = {
+  id: string;
+  state: string;
+  cpu: number;
+  memMb: number;
+  guestIp: string;
+  outboundInternet: boolean;
+  createdAt: string;
+  provisionMode?: "boot" | "snapshot";
+};
+type SnapshotMeta = { id: string; kind: string; createdAt: string; cpu: number; memMb: number; sourceVmId?: string; hasDisk: boolean };
+
+async function createVm(payload: { cpu: number; memMb: number; allowIps: string[]; outboundInternet: boolean }): Promise<VmPublic> {
+  const started = Date.now();
+  const { status, json } = await apiJson<VmPublic>("POST", `${MANAGER_BASE}/v1/vms`, payload);
+  expect(status).toBe(201);
+  expect(json.id).toBeTruthy();
+  const elapsedMs = Date.now() - started;
+  // eslint-disable-next-line no-console
+  console.info("[it] vm create timing", { elapsedMs, payload, provisionMode: json.provisionMode });
+  if (MAX_CREATE_MS != null) {
+    expect(elapsedMs).toBeLessThanOrEqual(MAX_CREATE_MS);
+  }
+  return json;
+}
+
+async function deleteVm(vmId: string): Promise<void> {
+  const res = await fetch(`${MANAGER_BASE}/v1/vms/${vmId}`, { method: "DELETE", headers: { "X-API-Key": API_KEY } });
+  // best-effort
+  if (!res.ok && res.status !== 404) {
+    // eslint-disable-next-line no-console
+    console.warn("Failed to delete VM", { vmId, status: res.status });
+  }
+}
+
+async function getVm(vmId: string): Promise<VmPublic> {
+  const { status, json } = await apiJson<VmPublic>("GET", `${MANAGER_BASE}/v1/vms/${vmId}`);
+  expect(status).toBe(200);
+  return json;
+}
+
+async function createSnapshot(vmId: string): Promise<SnapshotMeta> {
+  const { status, json } = await apiJson<SnapshotMeta>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/snapshots`);
+  expect(status).toBe(201);
+  expect(json.id).toBeTruthy();
+  expect(json.hasDisk).toBe(true);
+  return json;
+}
+
+async function listSnapshots(): Promise<SnapshotMeta[]> {
+  const { status, json } = await apiJson<SnapshotMeta[]>("GET", `${MANAGER_BASE}/v1/snapshots`);
+  expect(status).toBe(200);
+  return json;
+}
+
+async function vmExec(vmId: string, cmd: string): Promise<ExecResult> {
+  const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/exec`, { cmd });
+  expect(status).toBe(200);
+  return json;
+}
+
+async function vmRunTs(vmId: string, code: string): Promise<ExecResult> {
+  const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/run-ts`, { code });
+  expect(status).toBe(200);
+  return json;
+}
+
+async function vmRunTsPath(vmId: string, path: string): Promise<ExecResult> {
+  const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/run-ts`, { path });
+  expect(status).toBe(200);
+  return json;
+}
+
+describe.sequential("run-dat-sheesh integration (vitest)", () => {
+  let vmDeny = "";
+  let vmOk = "";
+  let tmpDir = "";
+  let uploadBuf: Uint8Array | null = null;
+  let sdkUploadBuf: Uint8Array | null = null;
+
+  beforeAll(async () => {
+    await waitForManager();
+    // eslint-disable-next-line no-console
+    console.info("[it] snapshots enabled?", { ENABLE_SNAPSHOTS, MAX_CREATE_MS });
+
+    vmDeny = (await createVm({ cpu: 1, memMb: 256, allowIps: ["1.2.3.4/32"], outboundInternet: true })).id;
+    vmOk = (await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true })).id;
+
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "run-dat-sheesh-it-"));
+    const helloPath = path.join(tmpDir, "hello.txt");
+    fs.writeFileSync(helloPath, "hello run-dat-sheesh", "utf-8");
+    const uploadTar = path.join(tmpDir, "upload.tar.gz");
+    mustExec("tar", ["-czf", uploadTar, "-C", tmpDir, "hello.txt"], { stdio: "inherit" });
+    uploadBuf = new Uint8Array(fs.readFileSync(uploadTar));
+
+    // Prepare a tiny "SDK" + an app entrypoint that imports it.
+    const sdkDir = path.join(tmpDir, "sdk");
+    const appDir = path.join(tmpDir, "app");
+    fs.mkdirSync(sdkDir, { recursive: true });
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(path.join(sdkDir, "mod.ts"), 'export function greet(name: string) { return `hello ${name}`; }\n', "utf-8");
+    fs.writeFileSync(
+      path.join(appDir, "main.ts"),
+      'import { greet } from "file:///home/user/sdk/mod.ts";\nconsole.log(greet("world"));\n',
+      "utf-8"
+    );
+    const sdkTar = path.join(tmpDir, "sdk-upload.tar.gz");
+    mustExec("tar", ["-czf", sdkTar, "-C", tmpDir, "sdk", "app"], { stdio: "inherit" });
+    sdkUploadBuf = new Uint8Array(fs.readFileSync(sdkTar));
+  });
+
+  afterAll(async () => {
+    if (vmDeny) await deleteVm(vmDeny);
+    if (vmOk) await deleteVm(vmOk);
+  });
+
+  it("allowIps: denies non-allowlisted destination", async () => {
+    const deny = await vmExec(vmDeny, "curl -fsS --max-time 2 http://172.16.0.1:18080/ >/dev/null");
+    expect(deny.exitCode).not.toBe(0);
+  });
+
+  it("allowIps: allows allowlisted destination", async () => {
+    const allow = await vmExec(vmOk, "curl -fsS --max-time 2 http://172.16.0.1:18080/");
+    expect(allow.exitCode).toBe(0);
+    expect(allow.stdout.trim()).toBe("ok");
+  });
+
+  it("exec: runs as uid 1000", async () => {
+    const idu = await vmExec(vmOk, "id -u");
+    expect(idu.stdout.trim()).toBe("1000");
+  });
+
+  it("exec: mkdir inside /home/user and ls parent shows it", async () => {
+    const mkdirLs = await vmExec(vmOk, "mkdir -p /home/user/integration-test-dir && ls -1 /home/user");
+    expect(mkdirLs.exitCode).toBe(0);
+    expect(mkdirLs.stdout.split("\n").map((s) => s.trim()).filter(Boolean)).toContain("integration-test-dir");
+  });
+
+  it("files: upload succeeds to /home/user", async () => {
+    const { status } = await apiBinary(
+      "POST",
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user/project")}`,
+      uploadBuf ?? undefined
+    );
+    expect(status).toBe(204);
+  });
+
+  it("files: upload is rejected outside /home/user", async () => {
+    const { status } = await apiBinary(
+      "POST",
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/etc")}`,
+      uploadBuf ?? undefined
+    );
+    expect(status).toBe(400);
+  });
+
+  it("files: download succeeds from /home/user and contents match", async () => {
+    const { status, buf } = await apiBinary(
+      "GET",
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/download?path=${encodeURIComponent("/home/user/project")}`
+    );
+    expect(status).toBe(200);
+    const dlTar = path.join(tmpDir, "download.tar.gz");
+    fs.writeFileSync(dlTar, buf);
+    const outDir = path.join(tmpDir, "out");
+    fs.mkdirSync(outDir, { recursive: true });
+    mustExec("tar", ["-xzf", dlTar, "-C", outDir], { stdio: "inherit" });
+    const downloaded = fs.readFileSync(path.join(outDir, "hello.txt"), "utf-8");
+    expect(downloaded).toBe("hello run-dat-sheesh");
+  });
+
+  it("files: download is rejected outside /home/user", async () => {
+    const { status } = await apiBinary("GET", `${MANAGER_BASE}/v1/vms/${vmOk}/files/download?path=${encodeURIComponent("/etc")}`);
+    expect(status).toBe(400);
+  });
+
+  it("run-ts: returns stdout", async () => {
+    const ts = await vmRunTs(vmOk, "console.log(2 + 2)");
+    expect(ts.exitCode).toBe(0);
+    expect(ts.stdout.trim()).toBe("4");
+  });
+
+  it("run-ts: can import an uploaded SDK module from /home/user", async () => {
+    // Upload SDK + app files into /home/user (tar contains sdk/ and app/ directories).
+    const { status } = await apiBinary(
+      "POST",
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user")}`,
+      sdkUploadBuf ?? undefined
+    );
+    expect(status).toBe(204);
+
+    const res = await vmRunTsPath(vmOk, "/home/user/app/main.ts");
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout.trim()).toBe("hello world");
+  });
+
+  it("snapshots: template-sized VM uses snapshot provision mode", async () => {
+    if (!ENABLE_SNAPSHOTS) return;
+    const vm = await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true });
+    try {
+      expect(vm.provisionMode).toBe("snapshot");
+    } finally {
+      await deleteVm(vm.id);
+    }
+  });
+
+  it("snapshots: non-template size falls back to boot provision mode", async () => {
+    if (!ENABLE_SNAPSHOTS) return;
+    const vm = await createVm({ cpu: 1, memMb: 512, allowIps: ["172.16.0.1/32"], outboundInternet: true });
+    try {
+      expect(vm.provisionMode).toBe("boot");
+    } finally {
+      await deleteVm(vm.id);
+    }
+  });
+
+  it("snapshots: guest eth0 IPv4 matches VM guestIp", async () => {
+    if (!ENABLE_SNAPSHOTS) return;
+    const vm = await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true });
+    try {
+      const info = await getVm(vm.id);
+      const res = await vmExec(vm.id, "ip -4 -o addr show dev eth0 | awk '{print $4}'");
+      expect(res.exitCode).toBe(0);
+      const ips = res.stdout
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => s.split("/")[0]);
+      expect(ips).toContain(info.guestIp);
+    } finally {
+      await deleteVm(vm.id);
+    }
+  });
+
+  it("snapshots: can snapshot a configured VM (with /home/user sdk files) and spawn multiple VMs from it", async () => {
+    if (!ENABLE_SNAPSHOTS) return;
+
+    // 1) Create base VM (cold or template snapshot; doesn't matter).
+    const base = await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true });
+    let snap: SnapshotMeta | null = null;
+    try {
+      // 2) Upload SDK file into /home/user (simulate user-provided SDK).
+      const sdkPath = `/home/user/sdk-${Date.now()}.txt`;
+      const write = await vmExec(base.id, `echo "sdk-ok" > ${sdkPath}`);
+      expect(write.exitCode).toBe(0);
+
+      // 3) Snapshot this VM, then destroy it.
+      snap = await createSnapshot(base.id);
+    } finally {
+      await deleteVm(base.id);
+    }
+
+    expect(snap).toBeTruthy();
+    const all = await listSnapshots();
+    expect(all.map((s) => s.id)).toContain(snap!.id);
+
+    // 4) Create two VMs from the same snapshot in parallel.
+    const [a, b] = await Promise.all([
+      createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: snap!.id } as any),
+      createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: snap!.id } as any)
+    ]);
+
+    try {
+      expect(a.provisionMode).toBe("snapshot");
+      expect(b.provisionMode).toBe("snapshot");
+
+      // Each VM should see the SDK file from the snapshot disk baseline.
+      const checkA = await vmExec(a.id, `cat /home/user/sdk-*.txt | tail -n 1`);
+      const checkB = await vmExec(b.id, `cat /home/user/sdk-*.txt | tail -n 1`);
+      expect(checkA.exitCode).toBe(0);
+      expect(checkB.exitCode).toBe(0);
+      expect(checkA.stdout.trim()).toBe("sdk-ok");
+      expect(checkB.stdout.trim()).toBe("sdk-ok");
+
+      // Isolation check: write in A should not appear in B (per-VM disk clone).
+      const isoA = await vmExec(a.id, `echo "only-a" > /home/user/only-a.txt && cat /home/user/only-a.txt`);
+      expect(isoA.exitCode).toBe(0);
+      expect(isoA.stdout.trim()).toBe("only-a");
+      const isoB = await vmExec(b.id, `test -f /home/user/only-a.txt`);
+      expect(isoB.exitCode).not.toBe(0);
+    } finally {
+      await Promise.all([deleteVm(a.id), deleteVm(b.id)]);
+    }
+  });
+});
+

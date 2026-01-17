@@ -1,0 +1,35 @@
+version: "3.9"
+
+services:
+  manager:
+    build:
+      context: .
+      dockerfile: services/manager/Dockerfile
+    privileged: true
+    environment:
+      API_KEY: ${API_KEY:-dev-key}
+      PORT: 3000
+      KERNEL_PATH: /artifacts/vmlinux
+      BASE_ROOTFS_PATH: /artifacts/rootfs.ext4
+      STORAGE_ROOT: /var/lib/run-dat-sheesh
+      AGENT_VSOCK_PORT: 8080
+      ROOTFS_CLONE_MODE: ${ROOTFS_CLONE_MODE:-auto}
+      ENABLE_SNAPSHOTS: ${ENABLE_SNAPSHOTS:-false}
+      SNAPSHOT_TEMPLATE_CPU: ${SNAPSHOT_TEMPLATE_CPU:-1}
+      SNAPSHOT_TEMPLATE_MEM_MB: ${SNAPSHOT_TEMPLATE_MEM_MB:-256}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./services/guest-image/dist:/artifacts
+      # Persist all manager state to the host:
+      # - per-VM rootfs clones:  /var/lib/run-dat-sheesh/<vmId>/rootfs.ext4
+      # - per-VM logs:          /var/lib/run-dat-sheesh/<vmId>/logs/*
+      # - snapshots:            /var/lib/run-dat-sheesh/snapshots/<snapshotId>/*
+      #
+      # Override RUN_DAT_SHEESH_DATA_DIR to choose where it lives on your machine.
+      - ${RUN_DAT_SHEESH_DATA_DIR:-./data}:/var/lib/run-dat-sheesh
+    devices:
+      - /dev/kvm:/dev/kvm
+      - /dev/vhost-vsock:/dev/vhost-vsock
+    cap_add:
+      - NET_ADMIN

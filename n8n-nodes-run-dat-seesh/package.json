@@ -1,0 +1,46 @@
+{
+  "name": "n8n-nodes-run-dat-sheesh",
+  "version": "0.1.0",
+  "description": "n8n community nodes for run-dat-sheesh manager API",
+  "license": "MIT",
+  "homepage": "https://github.com/your-org/run-dat-sheesh",
+  "author": "run-dat-sheesh",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "firecracker",
+    "sandbox"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/run-dat-sheesh.git"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "n8n-core": "^1.0.0",
+    "n8n-workflow": "^1.0.0",
+    "typescript": "^5.5.4"
+  },
+  "peerDependencies": {
+    "n8n-core": "^1.0.0",
+    "n8n-workflow": "^1.0.0"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/RunDatsheeshApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/RunDatsheesh/RunDatsheesh.node.js"
+    ]
+  }
+}
+

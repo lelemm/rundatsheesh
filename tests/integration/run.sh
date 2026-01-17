@@ -1,0 +1,129 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+API_KEY=${API_KEY:-dev-key}
+MANAGER_PORT=${MANAGER_PORT:-3000}
+MANAGER_BASE=${MANAGER_BASE:-http://127.0.0.1:${MANAGER_PORT}}
+ENABLE_SNAPSHOTS=${ENABLE_SNAPSHOTS:-false}
+SNAPSHOT_TEMPLATE_CPU=${SNAPSHOT_TEMPLATE_CPU:-1}
+SNAPSHOT_TEMPLATE_MEM_MB=${SNAPSHOT_TEMPLATE_MEM_MB:-256}
+
+require_dep() {
+  local dep="$1"
+  if ! command -v "$dep" >/dev/null 2>&1; then
+    echo "Missing dependency: $dep"
+    return 1
+  fi
+}
+
+skip_if_missing_kvm() {
+  if [ ! -e /dev/kvm ]; then
+    echo "Skipping integration: /dev/kvm not available"
+    exit 0
+  fi
+}
+
+skip_if_missing_vsock() {
+  if [ ! -e /dev/vhost-vsock ]; then
+    echo "Skipping integration: /dev/vhost-vsock not available (vsock unsupported)"
+    exit 0
+  fi
+
+  # vhost_vsock may be built-in (not listed in /proc/modules). Accept either.
+  if [ ! -e /sys/module/vhost_vsock ] && ! grep -q "^vhost_vsock " /proc/modules; then
+    echo "Skipping integration: vhost_vsock module not loaded"
+    exit 0
+  fi
+
+  if [ ! -e /sys/module/vsock ] && ! grep -q "^vsock " /proc/modules; then
+    echo "Skipping integration: vsock module not available"
+    exit 0
+  fi
+}
+
+compute_dev_args() {
+  DEV_ARGS=(--device /dev/kvm --device /dev/vhost-vsock)
+  if [ -e /dev/vsock ]; then
+    DEV_ARGS+=(--device /dev/vsock)
+  else
+    echo "Warning: /dev/vsock not available; vsock connect may fail"
+  fi
+}
+
+wait_for_manager() {
+  local api_key="$1"
+  for i in {1..60}; do
+    if curl -sf -H "X-API-Key: $api_key" "$MANAGER_BASE/v1/vms" >/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+skip_if_missing_kvm
+skip_if_missing_vsock
+require_dep docker || exit 1
+require_dep curl || exit 1
+
+compute_dev_args
+
+echo "Building guest artifacts (kernel + rootfs)..."
+"$ROOT_DIR/services/guest-image/build.sh"
+
+echo "Building manager docker image..."
+docker build --progress=plain -f "$ROOT_DIR/services/manager/Dockerfile" -t run-dat-sheesh-manager "$ROOT_DIR"
+
+echo "Starting manager container..."
+CID=$(docker run -d --rm --privileged \
+  "${DEV_ARGS[@]}" \
+  --cap-add NET_ADMIN \
+  -e API_KEY="$API_KEY" \
+  -e PORT="$MANAGER_PORT" \
+  -e KERNEL_PATH=/artifacts/vmlinux \
+  -e BASE_ROOTFS_PATH=/artifacts/rootfs.ext4 \
+  -e STORAGE_ROOT=/var/lib/run-dat-sheesh \
+  -e AGENT_VSOCK_PORT=8080 \
+  -e ROOTFS_CLONE_MODE="${ROOTFS_CLONE_MODE:-auto}" \
+  -e ENABLE_SNAPSHOTS="$ENABLE_SNAPSHOTS" \
+  -e SNAPSHOT_TEMPLATE_CPU="$SNAPSHOT_TEMPLATE_CPU" \
+  -e SNAPSHOT_TEMPLATE_MEM_MB="$SNAPSHOT_TEMPLATE_MEM_MB" \
+  -p "${MANAGER_PORT}:${MANAGER_PORT}" \
+  -v "$ROOT_DIR/services/guest-image/dist:/artifacts" \
+  run-dat-sheesh-manager)
+
+FAILED=0
+cleanup() {
+  if [ "${FAILED:-0}" -ne 0 ]; then
+    echo "=== manager logs (failure) ==="
+    docker logs "$CID" || true
+  fi
+  docker stop "$CID" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+echo "Waiting for manager..."
+wait_for_manager "$API_KEY" || { echo "Manager did not become ready"; FAILED=1; exit 1; }
+
+if [ "$ENABLE_SNAPSHOTS" = "true" ]; then
+  echo "Building template snapshot inside manager container..."
+  docker exec "$CID" sh -lc 'node dist/index.js snapshot-build' || { echo "Snapshot build failed"; FAILED=1; exit 1; }
+fi
+
+echo "Starting test HTTP server inside manager container..."
+# Listen on 0.0.0.0 so it stays valid even before the tap interface (172.16.0.1) is created.
+docker exec "$CID" sh -lc 'node -e "require(\"http\").createServer((req,res)=>res.end(\"ok\")).listen(18080,\"0.0.0.0\")" >/tmp/test-server.log 2>&1 & echo $! > /tmp/test-server.pid'
+
+export API_KEY
+export MANAGER_BASE
+export ENABLE_SNAPSHOTS
+if [ "$ENABLE_SNAPSHOTS" = "true" ] && [ -n "${SNAPSHOT_MAX_CREATE_MS:-}" ] && [ -z "${MAX_CREATE_MS:-}" ]; then
+  export MAX_CREATE_MS="$SNAPSHOT_MAX_CREATE_MS"
+else
+  export MAX_CREATE_MS=${MAX_CREATE_MS:-}
+fi
+
+echo "Running vitest integration suite..."
+npm -s run test:vitest || { FAILED=1; exit 1; }
+
