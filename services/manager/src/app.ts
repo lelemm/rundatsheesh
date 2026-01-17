@@ -2,10 +2,13 @@ import Fastify from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
 import rateLimit from "@fastify/rate-limit";
+import fastifyStatic from "@fastify/static";
 import { authPlugin } from "./api/auth.js";
 import { HttpError } from "./api/httpErrors.js";
 import { apiPlugin } from "./api/routes.js";
 import type { AppDeps } from "./types/deps.js";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface BuildAppOptions {
   apiKey: string;
@@ -116,6 +119,33 @@ export function buildApp(options: BuildAppOptions) {
     uiConfig: {
       docExpansion: "list"
     }
+  });
+
+  // Embedded admin UI (static export) served from `/`.
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const adminUiRoot = path.join(__dirname, "..", "public", "admin");
+
+  app.register(fastifyStatic, {
+    root: adminUiRoot,
+    prefix: "/",
+    decorateReply: true,
+    index: ["index.html"]
+  });
+
+  // SPA-like fallback: serve index.html for non-API, non-doc routes when a file isn't found.
+  app.setNotFoundHandler(async (request, reply) => {
+    const url = request.raw.url ?? request.url;
+    if (url.startsWith("/v1/") || url.startsWith("/docs") || url === "/openapi.json") {
+      reply.code(404);
+      return reply.send({ message: "Not Found" });
+    }
+    const accept = request.headers["accept"] ?? "";
+    if (typeof accept === "string" && accept.includes("text/html")) {
+      return reply.sendFile("index.html");
+    }
+    reply.code(404);
+    return reply.send({ message: "Not Found" });
   });
 
   // Convenience endpoint for tooling (and to match the auth plugin allowlist).

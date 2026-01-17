@@ -4,6 +4,8 @@ services/manager/dist/
 services/guest-agent/dist/
 services/guest-image/dist/
 services/manager/run-data/
+services/manager/db/
+services/manager/public/admin/
 *.log
 npm-debug.log*
 pnpm-debug.log*

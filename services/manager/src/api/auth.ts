@@ -7,10 +7,9 @@ export interface AuthPluginOptions {
 
 const authPluginImpl: FastifyPluginAsync<AuthPluginOptions> = async (app, opts) => {
   app.addHook("preHandler", async (request, reply) => {
-    // Keep docs/spec public so Swagger UI can load the OpenAPI document before the user provides an API key.
-    // The actual API endpoints remain protected via the security scheme in the OpenAPI spec.
     const url = request.raw.url ?? request.url;
-    if (url === "/openapi.json" || url.startsWith("/docs")) {
+    // Only protect API routes; the embedded admin UI is served from `/` and must be publicly fetchable by the browser.
+    if (!url.startsWith("/v1/")) {
       return;
     }
 

@@ -1,4 +1,20 @@
 # syntax=docker/dockerfile:1
+FROM node:20-bookworm AS ui-builder
+
+WORKDIR /ui
+COPY services/manager/admin-ui/package.json services/manager/admin-ui/package-lock.json ./
+RUN npm ci
+COPY services/manager/admin-ui/app ./app
+COPY services/manager/admin-ui/components ./components
+COPY services/manager/admin-ui/hooks ./hooks
+COPY services/manager/admin-ui/lib ./lib
+COPY services/manager/admin-ui/public ./public
+COPY services/manager/admin-ui/styles ./styles
+COPY services/manager/admin-ui/next.config.mjs ./next.config.mjs
+COPY services/manager/admin-ui/postcss.config.mjs ./postcss.config.mjs
+COPY services/manager/admin-ui/tsconfig.json ./tsconfig.json
+RUN npm run build
+
 FROM node:20-bookworm AS builder
 
 WORKDIR /app
@@ -14,6 +30,7 @@ COPY services/manager/drizzle.sqlite.config.ts services/manager/drizzle.pg.confi
 # Work around sporadic V8/Turbofan crashes during TypeScript compilation in some environments.
 RUN NODE_OPTIONS=--jitless npm run build
 RUN npm prune --omit=dev
+COPY --from=ui-builder /ui/out ./public/admin
 
 FROM node:20-bookworm AS runtime
 
@@ -40,6 +57,7 @@ COPY --from=builder /app/package.json /app/package-lock.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/drizzle ./drizzle
+COPY --from=builder /app/public ./public
 
 ENV NODE_ENV=production
 ENV PORT=3000

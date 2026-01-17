@@ -1,12 +1,20 @@
-.PHONY: deps build unit integration test verify
+.PHONY: deps build unit integration test verify admin-ui-deps admin-ui-build
+
+admin-ui-deps:
+	cd services/manager/admin-ui && npm ci
+
+admin-ui-build:
+	cd services/manager/admin-ui && npm run build
 
 deps:
 	cd services/manager && npm ci
+	cd services/manager/admin-ui && npm ci
 	cd services/guest-agent && npm ci
 	cd tests/integration && npm ci
 
 build:
 	cd services/manager && npm run build
+	cd services/manager/admin-ui && npm run build
 	cd services/guest-agent && npm run build
 	./scripts/build-guest-image.sh
 	./scripts/build-manager-image.sh
