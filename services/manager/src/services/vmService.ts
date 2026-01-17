@@ -4,6 +4,7 @@ import type { AgentClient, FirecrackerManager, NetworkManager, StorageProvider, 
 import type { VmCreateRequest, VmProvisionMode, VmPublic, VmRecord } from "../types/vm.js";
 import type { SnapshotMeta } from "../types/snapshot.js";
 import { HttpError } from "../api/httpErrors.js";
+import type { ActivityService } from "../telemetry/activityService.js";
 
 export interface VmServiceOptions {
   store: VmStore;
@@ -11,6 +12,7 @@ export interface VmServiceOptions {
   network: NetworkManager;
   agentClient: AgentClient;
   storage: StorageProvider;
+  activity?: ActivityService;
   snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   vsockCidStart?: number;
   limits?: {
@@ -29,6 +31,7 @@ export class VmService {
   private readonly network: NetworkManager;
   private readonly agentClient: AgentClient;
   private readonly storage: StorageProvider;
+  private readonly activity?: ActivityService;
   private readonly snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   private readonly limits: NonNullable<VmServiceOptions["limits"]>;
   private nextVsockCid: number;
@@ -39,6 +42,7 @@ export class VmService {
     this.network = options.network;
     this.agentClient = options.agentClient;
     this.storage = options.storage;
+    this.activity = options.activity;
     this.snapshots = options.snapshots;
     this.limits = options.limits ?? {
       maxVms: 20,
@@ -120,6 +124,13 @@ export class VmService {
     };
 
     await this.store.create(vm);
+    await this.activity?.logEvent({
+      type: "vm.created",
+      entityType: "vm",
+      entityId: vm.id,
+      message: `VM created (${vm.cpu} vCPU, ${vm.memMb} MiB)`,
+      meta: { cpu: vm.cpu, memMb: vm.memMb, outboundInternet: vm.outboundInternet }
+    });
 
     try {
       // Explicit snapshotId takes precedence over template snapshots.
@@ -153,6 +164,13 @@ export class VmService {
 
         await this.agentClient.applyAllowlist(vm.id, request.allowIps, vm.outboundInternet);
         await this.store.update(vm.id, { state: "RUNNING", provisionMode: mode });
+        await this.activity?.logEvent({
+          type: "vm.started",
+          entityType: "vm",
+          entityId: vm.id,
+          message: "VM started (restored from snapshot)",
+          meta: { mode, snapshotId: request.snapshotId }
+        });
         const totalMs = Date.now() - tTotalStart;
         // eslint-disable-next-line no-console
         console.info("[vm-provision]", {
@@ -237,6 +255,13 @@ export class VmService {
 
       await this.agentClient.applyAllowlist(vm.id, request.allowIps, vm.outboundInternet);
       await this.store.update(vm.id, { state: "RUNNING", provisionMode: mode });
+      await this.activity?.logEvent({
+        type: "vm.started",
+        entityType: "vm",
+        entityId: vm.id,
+        message: `VM started (${mode})`,
+        meta: { mode }
+      });
       const totalMs = Date.now() - tTotalStart;
       // Coarse provisioning metrics for troubleshooting slow starts.
       // Intentionally console-based so it shows up in container logs without extra wiring.
@@ -284,6 +309,13 @@ export class VmService {
       hasDisk: true
     };
     await fs.writeFile(paths.metaPath, JSON.stringify(meta, null, 2), "utf-8");
+    await this.activity?.logEvent({
+      type: "snapshot.created",
+      entityType: "snapshot",
+      entityId: snapshotId,
+      message: `Snapshot created from VM ${vm.id}`,
+      meta: { vmId: vm.id, cpu: vm.cpu, memMb: vm.memMb }
+    });
     return meta;
   }
 
@@ -310,6 +342,13 @@ export class VmService {
     const agentHealthMs = Date.now() - tAgentHealthStart;
     await this.agentClient.applyAllowlist(vm.id, vm.allowIps, vm.outboundInternet);
     await this.store.update(vm.id, { state: "RUNNING", provisionMode: "boot" });
+    await this.activity?.logEvent({
+      type: "vm.started",
+      entityType: "vm",
+      entityId: vm.id,
+      message: "VM started",
+      meta: { mode: "boot" }
+    });
     // eslint-disable-next-line no-console
     console.info("[vm-start]", { vmId: vm.id, firecrackerMs, agentHealthMs });
   }
@@ -321,6 +360,12 @@ export class VmService {
     // Tear down host networking so a later `start` can recreate the tap cleanly.
     await this.network.teardown(vm, vm.tapName).catch(() => undefined);
     await this.store.update(vm.id, { state: "STOPPED" });
+    await this.activity?.logEvent({
+      type: "vm.stopped",
+      entityType: "vm",
+      entityId: vm.id,
+      message: "VM stopped"
+    });
   }
 
   async destroy(id: string): Promise<void> {
@@ -329,6 +374,12 @@ export class VmService {
     await this.network.teardown(vm, vm.tapName);
     await this.storage.cleanupVmStorage(vm.id);
     await this.store.update(vm.id, { state: "DELETED" });
+    await this.activity?.logEvent({
+      type: "vm.deleted",
+      entityType: "vm",
+      entityId: vm.id,
+      message: "VM deleted"
+    });
   }
 
   async exec(id: string, payload: { cmd: string; cwd?: string; env?: Record<string, string>; timeoutMs?: number }) {
@@ -336,7 +387,15 @@ export class VmService {
     if (typeof payload.timeoutMs === "number" && payload.timeoutMs > this.limits.maxExecTimeoutMs) {
       throw new HttpError(400, `timeoutMs exceeds maxExecTimeoutMs=${this.limits.maxExecTimeoutMs}`);
     }
-    return this.agentClient.exec(vm.id, payload);
+    const result = await this.agentClient.exec(vm.id, payload);
+    await this.activity?.logEvent({
+      type: "exec.command",
+      entityType: "vm",
+      entityId: vm.id,
+      message: `Exec command`,
+      meta: { cmd: payload.cmd, cwd: payload.cwd, timeoutMs: payload.timeoutMs, exitCode: result.exitCode }
+    });
+    return result;
   }
 
   async runTs(id: string, payload: { path?: string; code?: string; args?: string[]; denoFlags?: string[]; timeoutMs?: number }) {
@@ -344,7 +403,20 @@ export class VmService {
     if (typeof payload.timeoutMs === "number" && payload.timeoutMs > this.limits.maxRunTsTimeoutMs) {
       throw new HttpError(400, `timeoutMs exceeds maxRunTsTimeoutMs=${this.limits.maxRunTsTimeoutMs}`);
     }
-    return this.agentClient.runTs(vm.id, { ...payload, allowNet: vm.outboundInternet });
+    const result = await this.agentClient.runTs(vm.id, { ...payload, allowNet: vm.outboundInternet });
+    await this.activity?.logEvent({
+      type: "runTs.executed",
+      entityType: "vm",
+      entityId: vm.id,
+      message: "Run TypeScript",
+      meta: {
+        path: payload.path,
+        hasInlineCode: Boolean(payload.code),
+        timeoutMs: payload.timeoutMs,
+        exitCode: result.exitCode
+      }
+    });
+    return result;
   }
 
   async uploadFiles(id: string, dest: string, data: Buffer): Promise<void> {

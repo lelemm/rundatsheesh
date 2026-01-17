@@ -18,3 +18,13 @@ export const vms = pgTable("vms", {
   provisionMode: text("provision_mode")
 });
 
+export const activityEvents = pgTable("activity_events", {
+  id: text("id").primaryKey(),
+  createdAt: text("created_at").notNull(),
+  type: text("type").notNull(),
+  entityType: text("entity_type"),
+  entityId: text("entity_id"),
+  message: text("message").notNull(),
+  metaJson: text("meta_json")
+});
+

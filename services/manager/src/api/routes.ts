@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { AppDeps } from "../types/deps.js";
+import { DashboardService } from "../telemetry/dashboardService.js";
 
 export interface ApiPluginOptions {
   deps: AppDeps;
@@ -11,6 +12,46 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     jsonMedium: 1024 * 1024,
     uploadCompressed: 10 * 1024 * 1024
   };
+
+  app.get(
+    "/v1/admin/overview",
+    {
+      schema: {
+        summary: "Admin overview",
+        description: "Aggregated dashboard stats (VM counts, snapshot counts, CPU/mem/storage).",
+        tags: ["admin"],
+        response: { 200: { type: "object", additionalProperties: true } }
+      }
+    },
+    async () => {
+      const svc = new DashboardService(opts.deps.store, opts.deps.storage, opts.deps.storageRoot);
+      return svc.getOverview();
+    }
+  );
+
+  app.get(
+    "/v1/admin/activity",
+    {
+      schema: {
+        summary: "Admin activity",
+        description: "Recent activity events emitted by the manager.",
+        tags: ["admin"],
+        querystring: {
+          type: "object",
+          properties: {
+            limit: { type: "number" }
+          }
+        },
+        response: { 200: { type: "array", items: { type: "object", additionalProperties: true } } }
+      }
+    },
+    async (request) => {
+      const limit = Number((request.query as any)?.limit ?? 50);
+      const svc = opts.deps.activityService;
+      if (!svc) return [];
+      return svc.listEvents({ limit });
+    }
+  );
 
   app.get(
     "/v1/snapshots",

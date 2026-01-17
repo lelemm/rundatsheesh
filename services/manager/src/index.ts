@@ -9,15 +9,22 @@ import { SimpleNetworkManager } from "./network/networkManager.js";
 import { LocalStorageProvider } from "./storage/storageProvider.js";
 import { SqlVmStore } from "./state/sqlVmStore.js";
 import { VmService } from "./services/vmService.js";
+import { ActivityService } from "./telemetry/activityService.js";
+import { initOtel, shutdownOtel } from "./telemetry/otel.js";
 import fs from "node:fs/promises";
 import { computeSnapshotVersion } from "./snapshots/snapshotVersion.js";
 
 async function main() {
   const env = loadEnv();
+  await initOtel({
+    otlpEndpoint: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    serviceName: process.env.OTEL_SERVICE_NAME ?? "run-dat-sheesh-manager"
+  });
 
   const db = createDb({ dialect: env.dbDialect, sqlitePath: env.sqlitePath, databaseUrl: env.databaseUrl });
   await runMigrations({ dialect: db.dialect, db: db.db });
   const store = new SqlVmStore(db.db as any, db.vms as any);
+  const activityService = new ActivityService(db.db as any, db.activityEvents as any);
   // After manager restart/recreate, Firecracker processes won't be running.
   // Normalize any transient states so `GET /v1/vms` doesn't claim they're still RUNNING.
   for (const vm of await store.list()) {
@@ -60,6 +67,7 @@ async function main() {
     agentClient,
     storage,
     limits: env.limits,
+    activity: activityService,
     snapshots: env.enableSnapshots
       ? { enabled: true, version: snapshotVersion, templateCpu: env.snapshotTemplateCpu, templateMemMb: env.snapshotTemplateMemMb }
       : undefined
@@ -71,7 +79,9 @@ async function main() {
     network,
     agentClient,
     storage,
-    vmService
+    storageRoot: env.storageRoot,
+    vmService,
+    activityService
   };
 
   if (process.argv[2] === "snapshot-build") {
@@ -95,6 +105,7 @@ async function main() {
 
   const shutdown = async () => {
     await db.close().catch(() => undefined);
+    await shutdownOtel().catch(() => undefined);
     await app.close().catch(() => undefined);
     process.exit(0);
   };
