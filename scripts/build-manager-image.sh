@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+IMAGE_NAME=${IMAGE_NAME:-run-dat-sheesh-manager}
 
-docker build -f "$ROOT_DIR/services/manager/Dockerfile" -t run-dat-sheesh-manager "$ROOT_DIR"
+docker build -f "$ROOT_DIR/services/manager/Dockerfile" -t "$IMAGE_NAME" "$ROOT_DIR"
 

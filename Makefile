@@ -1,4 +1,4 @@
-.PHONY: deps build unit integration test verify admin-ui-deps admin-ui-build
+.PHONY: deps build unit integration test verify admin-ui-deps admin-ui-build publish
 
 admin-ui-deps:
 	cd services/manager/admin-ui && npm ci
@@ -22,6 +22,10 @@ build:
 build-image:
 	./scripts/build-guest-image.sh
 	./scripts/build-manager-image.sh
+
+publish:
+	IMAGE_NAME=lelemm/rundatsheesh:latest ./scripts/build-manager-image.sh
+	docker push lelemm/rundatsheesh:latest
 
 unit:
 	cd services/manager && npm test
