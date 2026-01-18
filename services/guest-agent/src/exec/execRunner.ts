@@ -159,7 +159,9 @@ async function runSandboxedShell(
 
   // Convert the resolved host path (/home/user/...) into a chroot path (/...).
   const rel = path.relative(USER_HOME, options.cwd);
-  const cwdInChroot = rel && rel !== "." ? `/${rel}` : "/";
+  // Default to /workspace (an alias to `/` inside the chroot) to reduce confusion
+  // for clients that expect a "workspace" directory.
+  const cwdInChroot = rel && rel !== "." ? `/${rel}` : "/workspace";
 
   // Invoke BusyBox explicitly so we don't depend on /bin/sh symlink existing in the chroot.
   const script = `cd ${shellQuoteSingle(cwdInChroot)} && ${cmd}`;

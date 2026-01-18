@@ -50,6 +50,8 @@ RUN set -eux; \
     busybox-static \
     nodejs npm \
     deno \
+    git \
+    musl-utils \
   ; \
   # Ensure apk leaves no cache inside the rootfs.
   rm -rf /rootfs/var/cache/apk/* || true
@@ -67,6 +69,14 @@ RUN set -eux; \
   chroot /rootfs /bin/sh -c 'addgroup -g 1000 user || true; adduser -D -u 1000 -G user -s /bin/bash user || true; passwd -l root || true'; \
   # Confined toolchain under /home/user (static busybox)
   mkdir -p /rootfs/home/user/bin /rootfs/home/user/dev /rootfs/home/user/tmp; \
+  # Compatibility: inside `exec`, we chroot to /home/user, so the visible root is `/`.
+  # Some tooling assumes the working directory is `/home/user`. Provide `/home/user` inside
+  # the chroot as a safe symlink back to the chroot root (`..`), without escaping the real FS.
+  mkdir -p /rootfs/home/user/home; \
+  ln -sfn .. /rootfs/home/user/home/user; \
+  # Provide `/workspace` inside the chroot as a friendly alias to the chroot root (`/`),
+  # which corresponds to the VM's real `/home/user`.
+  ln -sfn . /rootfs/home/user/workspace; \
   bb_src=""; \
   for cand in /rootfs/bin/busybox.static /rootfs/bin/busybox /rootfs/usr/bin/busybox /rootfs/usr/sbin/busybox; do \
     if [ -x "$cand" ]; then bb_src="$cand"; break; fi; \
@@ -98,6 +108,39 @@ RUN set -eux; \
   mkdir -p /rootfs/home/user/.deno/bin; \
   if [ ! -e /rootfs/home/user/.deno/bin/deno ]; then ln -s /usr/bin/deno /rootfs/home/user/.deno/bin/deno; fi; \
   chown -R 1000:1000 /rootfs/home/user/.deno
+
+# Stage git into /home/user so `exec` (which chroots to /home/user) can run it.
+RUN set -eux; \
+  if [ -x /rootfs/usr/bin/git ]; then \
+    mkdir -p /rootfs/home/user/usr/bin; \
+    cp -a /rootfs/usr/bin/git /rootfs/home/user/usr/bin/git; \
+    execPath="$(chroot /rootfs /usr/bin/git --exec-path)"; \
+    if [ -n "$execPath" ] && [ -d "/rootfs${execPath}" ]; then \
+      mkdir -p "/rootfs/home/user${execPath}"; \
+      cp -a "/rootfs${execPath}/." "/rootfs/home/user${execPath}/"; \
+    fi; \
+    if [ -f /rootfs/etc/ssl/certs/ca-certificates.crt ]; then \
+      mkdir -p /rootfs/home/user/etc/ssl/certs; \
+      cp -a /rootfs/etc/ssl/certs/ca-certificates.crt /rootfs/home/user/etc/ssl/certs/ca-certificates.crt; \
+    fi; \
+    stage_ldd() { \
+      target="$1"; \
+      chroot /rootfs /usr/bin/ldd "$target" 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do \
+        if [ -e "/rootfs$dep" ]; then \
+          mkdir -p "/rootfs/home/user$(dirname "$dep")"; \
+          cp -a "/rootfs$dep" "/rootfs/home/user$dep"; \
+        fi; \
+      done; \
+    }; \
+    stage_ldd /usr/bin/git; \
+    if [ -n "${execPath:-}" ] && [ -d "/rootfs${execPath}" ]; then \
+      find "/rootfs${execPath}" -maxdepth 1 -type f -perm -111 2>/dev/null | sed 's|^/rootfs||' | while read -r helper; do \
+        stage_ldd "$helper"; \
+      done; \
+    fi; \
+    # Keep ownership consistent with the rest of /home/user (exec runs as uid/gid 1000).
+    chown -R 1000:1000 /rootfs/home/user/usr /rootfs/home/user/etc 2>/dev/null || true; \
+  fi
 
 # Guest agent runtime (ESM + dependencies)
 COPY --from=guest-agent-builder /src/package.json /rootfs/opt/guest-agent/package.json
