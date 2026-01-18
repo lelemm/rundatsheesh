@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist/images/
 services/manager/dist/
 services/guest-agent/dist/
 services/guest-image/dist/

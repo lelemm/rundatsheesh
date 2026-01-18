@@ -11,11 +11,27 @@ export const vms = sqliteTable("vms", {
   outboundInternet: integer("outbound_internet", { mode: "boolean" }).notNull(),
   // JSON string (e.g. '["1.2.3.4/32"]') for cross-dialect portability.
   allowIps: text("allow_ips").notNull(),
+  imageId: text("image_id"),
   rootfsPath: text("rootfs_path").notNull(),
   kernelPath: text("kernel_path").notNull(),
   logsDir: text("logs_dir").notNull(),
   createdAt: text("created_at").notNull(),
   provisionMode: text("provision_mode")
+});
+
+export const guestImages = sqliteTable("guest_images", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description").notNull(),
+  createdAt: text("created_at").notNull(),
+  kernelFilename: text("kernel_filename"),
+  rootfsFilename: text("rootfs_filename"),
+  baseRootfsBytes: integer("base_rootfs_bytes", { mode: "number" })
+});
+
+export const settings = sqliteTable("settings", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull()
 });
 
 export const activityEvents = sqliteTable("activity_events", {

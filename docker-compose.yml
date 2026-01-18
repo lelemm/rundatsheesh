@@ -52,9 +52,8 @@ services:
       ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       PORT: 3000
-      KERNEL_PATH: /artifacts/vmlinux
-      BASE_ROOTFS_PATH: /artifacts/rootfs.ext4
       STORAGE_ROOT: /var/lib/run-dat-sheesh
+      IMAGES_DIR: /var/lib/run-dat-sheesh/images
       AGENT_VSOCK_PORT: 8080
       ROOTFS_CLONE_MODE: ${ROOTFS_CLONE_MODE:-auto}
       ENABLE_SNAPSHOTS: ${ENABLE_SNAPSHOTS:-false}
@@ -63,7 +62,8 @@ services:
 
     # Manager is reachable only via Caddy (no host port publishing)
     volumes:
-      - ./services/guest-image/dist:/artifacts:ro
+      # Uploaded guest images (kernel + rootfs.ext4) live here on the host.
+      - ${RUN_DAT_SHEESH_IMAGES_DIR:-./images}:/var/lib/run-dat-sheesh/images
       # Persist all manager state to the host:
       # - per-VM rootfs clones:  /var/lib/run-dat-sheesh/<vmId>/rootfs.ext4
       # - per-VM logs:          /var/lib/run-dat-sheesh/<vmId>/logs/*

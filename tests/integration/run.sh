@@ -68,21 +68,25 @@ skip_if_missing_kvm
 skip_if_missing_vsock
 require_dep docker || exit 1
 require_dep curl || exit 1
+require_dep make || exit 1
+require_dep node || exit 1
 
 compute_dev_args
 
 echo "Building guest artifacts (kernel + rootfs)..."
-"$ROOT_DIR/services/guest-image/build.sh"
+make -C "$ROOT_DIR" guest-images
 
 echo "Building manager docker image..."
 docker build --progress=plain -f "$ROOT_DIR/services/manager/Dockerfile" -t run-dat-sheesh-manager "$ROOT_DIR"
 
 echo "Starting manager container..."
 RDS_DATA_DIR="$(mktemp -d)"
+RDS_IMAGES_DIR="$(mktemp -d)"
 # With `--cap-drop ALL`, even root in the container does NOT have CAP_DAC_OVERRIDE,
 # so bind-mounted host directories must be writable by the container's uid/gid via normal permissions.
 # mktemp defaults to 0700; make it writable like /tmp (world-writable + sticky bit).
 chmod 1777 "$RDS_DATA_DIR"
+chmod 1777 "$RDS_IMAGES_DIR"
 CID=$(docker run -d \
   "${DEV_ARGS[@]}" \
   --read-only \
@@ -108,16 +112,15 @@ CID=$(docker run -d \
   -e ADMIN_EMAIL="$ADMIN_EMAIL" \
   -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   -e PORT="$MANAGER_PORT" \
-  -e KERNEL_PATH=/artifacts/vmlinux \
-  -e BASE_ROOTFS_PATH=/artifacts/rootfs.ext4 \
   -e STORAGE_ROOT=/var/lib/run-dat-sheesh \
+  -e IMAGES_DIR=/var/lib/run-dat-sheesh/images \
   -e AGENT_VSOCK_PORT=8080 \
   -e ROOTFS_CLONE_MODE="${ROOTFS_CLONE_MODE:-auto}" \
   -e ENABLE_SNAPSHOTS="$ENABLE_SNAPSHOTS" \
   -e SNAPSHOT_TEMPLATE_CPU="$SNAPSHOT_TEMPLATE_CPU" \
   -e SNAPSHOT_TEMPLATE_MEM_MB="$SNAPSHOT_TEMPLATE_MEM_MB" \
   -p "${MANAGER_PORT}:${MANAGER_PORT}" \
-  -v "$ROOT_DIR/services/guest-image/dist:/artifacts:ro" \
+  -v "$RDS_IMAGES_DIR:/var/lib/run-dat-sheesh/images" \
   -v "$RDS_DATA_DIR:/var/lib/run-dat-sheesh" \
   run-dat-sheesh-manager)
 
@@ -130,11 +133,46 @@ cleanup() {
   docker stop "$CID" >/dev/null 2>&1 || true
   docker rm -f "$CID" >/dev/null 2>&1 || true
   rm -rf "$RDS_DATA_DIR" >/dev/null 2>&1 || true
+  rm -rf "$RDS_IMAGES_DIR" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
 echo "Waiting for manager..."
 wait_for_manager "$API_KEY" || { echo "Manager did not become ready"; FAILED=1; exit 1; }
+
+echo "Uploading Debian + Alpine guest images..."
+create_image() {
+  local name="$1"
+  local description="$2"
+  local res
+  res=$(curl -sf -X POST -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"name\":\"$name\",\"description\":\"$description\"}" \
+    "$MANAGER_BASE/v1/images")
+  node -e 'const fs=require("fs"); const s=fs.readFileSync(0,"utf8"); const j=JSON.parse(s); process.stdout.write(j.id);' <<<"$res"
+}
+
+upload_file() {
+  local image_id="$1"
+  local kind="$2"   # kernel|rootfs
+  local file_path="$3"
+  curl -sf -X PUT -H "X-API-Key: $API_KEY" -H "Content-Type: application/octet-stream" \
+    --data-binary @"$file_path" \
+    "$MANAGER_BASE/v1/images/$image_id/$kind" >/dev/null
+}
+
+set_default() {
+  local image_id="$1"
+  curl -sf -X POST -H "X-API-Key: $API_KEY" "$MANAGER_BASE/v1/images/$image_id/set-default" >/dev/null
+}
+
+DEBIAN_ID=$(create_image "Debian (integration)" "Built by integration runner")
+upload_file "$DEBIAN_ID" "kernel" "$ROOT_DIR/dist/images/debian/vmlinux"
+upload_file "$DEBIAN_ID" "rootfs" "$ROOT_DIR/dist/images/debian/rootfs.ext4"
+set_default "$DEBIAN_ID"
+
+ALPINE_ID=$(create_image "Alpine (integration)" "Built by integration runner")
+upload_file "$ALPINE_ID" "kernel" "$ROOT_DIR/dist/images/alpine/vmlinux"
+upload_file "$ALPINE_ID" "rootfs" "$ROOT_DIR/dist/images/alpine/rootfs.ext4"
 
 if [ "$ENABLE_SNAPSHOTS" = "true" ]; then
   echo "Building template snapshot inside manager container..."
@@ -155,5 +193,11 @@ else
 fi
 
 echo "Running vitest integration suite..."
+echo "=== integration: default image (debian) ==="
+unset VM_IMAGE_ID
+npm -s run test:vitest || { FAILED=1; exit 1; }
+
+echo "=== integration: alpine image ==="
+export VM_IMAGE_ID="$ALPINE_ID"
 npm -s run test:vitest || { FAILED=1; exit 1; }
 

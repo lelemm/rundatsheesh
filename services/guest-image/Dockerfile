@@ -52,8 +52,19 @@ RUN gcc -O2 -o /rootfs/sbin/init /tmp/guest-init.c \
   && chmod +x /rootfs/sbin/init \
   && rm -f /tmp/guest-init.c
 
-RUN truncate -s 2G /rootfs.ext4 \
-  && mke2fs -t ext4 -F -d /rootfs /rootfs.ext4
+RUN set -eux; \
+  # Build ext4 from directory tree, then shrink it to the minimum size so we don't ship empty space.
+  # The resulting image can still be grown per-VM (offline) by the manager when provisioning.
+  truncate -s 1G /rootfs.ext4; \
+  mke2fs -t ext4 -F -d /rootfs /rootfs.ext4; \
+  e2fsck -pf /rootfs.ext4 || true; \
+  resize2fs -M /rootfs.ext4; \
+  e2fsck -pf /rootfs.ext4 || true; \
+  blocks="$(dumpe2fs -h /rootfs.ext4 2>/dev/null | awk -F: '/Block count/ { gsub(/ /,"",$2); print $2 }')"; \
+  bsize="$(dumpe2fs -h /rootfs.ext4 2>/dev/null | awk -F: '/Block size/ { gsub(/ /,"",$2); print $2 }')"; \
+  if [ -n "$blocks" ] && [ -n "$bsize" ]; then \
+    truncate -s "$((blocks * bsize))" /rootfs.ext4; \
+  fi
 
 RUN mkdir -p /out \
   && cp /build/linux-${KERNEL_VERSION}/vmlinux /out/vmlinux \

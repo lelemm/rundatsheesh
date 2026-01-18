@@ -3,9 +3,10 @@ export interface EnvConfig {
   adminEmail: string;
   adminPassword: string;
   port: number;
-  kernelPath: string;
-  baseRootfsPath: string;
+  kernelPath?: string;
+  baseRootfsPath?: string;
   storageRoot: string;
+  imagesDir: string;
   dbDialect: "sqlite" | "postgres";
   sqlitePath: string;
   databaseUrl?: string;
@@ -69,17 +70,11 @@ export function loadEnv(): EnvConfig {
     throw new Error("PORT must be a positive number");
   }
 
-  const kernelPath = process.env.KERNEL_PATH ?? "";
-  if (!kernelPath) {
-    throw new Error("KERNEL_PATH is required");
-  }
-
-  const baseRootfsPath = process.env.BASE_ROOTFS_PATH ?? "";
-  if (!baseRootfsPath) {
-    throw new Error("BASE_ROOTFS_PATH is required");
-  }
+  const kernelPath = process.env.KERNEL_PATH || undefined;
+  const baseRootfsPath = process.env.BASE_ROOTFS_PATH || undefined;
 
   const storageRoot = process.env.STORAGE_ROOT ?? "/var/lib/run-dat-sheesh";
+  const imagesDir = process.env.IMAGES_DIR ?? `${storageRoot}/images`;
 
   const dbDialectRaw = (process.env.DB_DIALECT ?? "sqlite").toLowerCase();
   const dbDialect = (["sqlite", "postgres"] as const).includes(dbDialectRaw as any) ? (dbDialectRaw as "sqlite" | "postgres") : null;
@@ -141,6 +136,7 @@ export function loadEnv(): EnvConfig {
     kernelPath,
     baseRootfsPath,
     storageRoot,
+    imagesDir,
     dbDialect,
     sqlitePath,
     databaseUrl,

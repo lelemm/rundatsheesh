@@ -19,6 +19,7 @@ export interface VmRecord {
   vsockCid: number;
   outboundInternet: boolean;
   allowIps: string[];
+  imageId?: string;
   rootfsPath: string;
   kernelPath: string;
   logsDir: string;
@@ -35,6 +36,7 @@ export interface VmPublic {
   outboundInternet: boolean;
   createdAt: string;
   provisionMode?: VmProvisionMode;
+  imageId?: string;
 }
 
 export interface VmCreateRequest {
@@ -43,6 +45,8 @@ export interface VmCreateRequest {
   allowIps: string[];
   outboundInternet?: boolean;
   snapshotId?: string;
+  imageId?: string;
+  diskSizeMb?: number;
 }
 
 export interface VmExecRequest {

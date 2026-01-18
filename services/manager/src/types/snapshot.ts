@@ -6,6 +6,7 @@ export interface SnapshotMeta {
   createdAt: string;
   cpu: number;
   memMb: number;
+  imageId?: string;
   kernelPath?: string;
   baseRootfsPath?: string;
   sourceVmId?: string;

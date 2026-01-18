@@ -40,8 +40,14 @@ export interface AgentClient {
 }
 
 export interface StorageProvider {
-  prepareVmStorage(vmId: string): Promise<{ rootfsPath: string; logsDir: string; kernelPath: string }>; 
-  prepareVmStorageFromDisk(vmId: string, diskSrcPath: string): Promise<{ rootfsPath: string; logsDir: string; kernelPath: string }>;
+  prepareVmStorage(
+    vmId: string,
+    input: { kernelSrcPath: string; baseRootfsPath: string; diskSizeBytes?: number }
+  ): Promise<{ rootfsPath: string; logsDir: string; kernelPath: string }>;
+  prepareVmStorageFromDisk(
+    vmId: string,
+    input: { kernelSrcPath: string; diskSrcPath: string; diskSizeBytes?: number }
+  ): Promise<{ rootfsPath: string; logsDir: string; kernelPath: string }>;
   cleanupVmStorage(vmId: string): Promise<void>;
   getSnapshotArtifactPaths(
     snapshotId: string

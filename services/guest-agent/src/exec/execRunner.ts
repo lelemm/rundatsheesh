@@ -137,8 +137,9 @@ function buildMinimalEnv(extra?: Record<string, string>) {
   // Do NOT inherit the guest-agent process env to avoid leaking internals.
   // Provide a minimal, predictable environment inside the chroot.
   return {
-    // `chroot` lives in /usr/sbin on Debian (coreutils), so include common sbin/bin paths.
-    PATH: "/usr/sbin:/usr/bin:/sbin:/bin",
+    // Prefer /usr/bin over /usr/sbin so we pick GNU/coreutils `chroot` on Alpine
+    // (BusyBox `chroot` may not support flags like `--userspec`).
+    PATH: "/usr/bin:/usr/sbin:/bin:/sbin",
     HOME: "/",
     USER: "user",
     LOGNAME: "user",

@@ -38,7 +38,7 @@ ARG FIRECRACKER_VERSION=1.7.0
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-     ca-certificates curl iproute2 iptables nftables socat util-linux \
+     ca-certificates curl iproute2 iptables nftables socat util-linux e2fsprogs \
   && rm -rf /var/lib/apt/lists/*
 
 # Dedicated unprivileged user/group for Firecracker when launched via jailer.

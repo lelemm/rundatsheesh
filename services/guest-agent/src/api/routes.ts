@@ -49,14 +49,17 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       return { message: "dest is required" };
     }
     const body = request.body as unknown;
-    const stream = Buffer.isBuffer(body) ? Readable.from(body) : request.raw;
+    // NOTE: Readable.from(Buffer) iterates bytes (numbers) and corrupts binary streams.
+    // Wrap the Buffer so it is emitted as a single chunk.
+    const stream = Buffer.isBuffer(body) ? Readable.from([body]) : request.raw;
     try {
       await opts.fileService.upload(dest, stream);
       reply.code(204);
       return;
     } catch (err) {
       reply.code(400);
-      return { message: "Invalid upload dest or archive" };
+      const detail = String((err as any)?.message ?? err);
+      return { message: "Invalid upload dest or archive", detail: detail.slice(0, 500) };
     }
   });
 

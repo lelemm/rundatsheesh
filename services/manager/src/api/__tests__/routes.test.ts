@@ -67,7 +67,8 @@ function buildTestApp(service: FakeVmService) {
     network: {} as AppDeps["network"],
     agentClient: {} as AppDeps["agentClient"],
     storage: {} as AppDeps["storage"],
-    storageRoot: "/tmp"
+    storageRoot: "/tmp",
+    images: {} as AppDeps["images"]
   } as unknown as AppDeps;
   return buildApp({ apiKey, adminEmail: "admin@example.com", adminPassword: "admin", deps });
 }

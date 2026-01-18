@@ -1,6 +1,9 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { AppDeps } from "../types/deps.js";
 import { DashboardService } from "../telemetry/dashboardService.js";
+import { BodyTooLargeError, readStreamToBuffer, writeStreamToFile } from "../utils/streams.js";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 export interface ApiPluginOptions {
   deps: AppDeps;
@@ -10,7 +13,9 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
   const BODY_LIMITS = {
     jsonSmall: 64 * 1024,
     jsonMedium: 1024 * 1024,
-    uploadCompressed: 10 * 1024 * 1024
+    uploadCompressed: 10 * 1024 * 1024,
+    // Images can be large; we stream uploads to disk but still enforce an upper bound.
+    imageBinary: 3 * 1024 * 1024 * 1024
   };
 
   const sessions = (app as any).sessions as { get: (id?: string | null) => any } | undefined;
@@ -35,6 +40,157 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     async () => {
       const svc = new DashboardService(opts.deps.store, opts.deps.storage, opts.deps.storageRoot);
       return svc.getOverview();
+    }
+  );
+
+  app.get(
+    "/v1/images",
+    {
+      schema: {
+        summary: "List guest images",
+        description: "Lists uploaded guest images (metadata stored in DB; artifacts stored on disk).",
+        tags: ["images"],
+        response: { 200: { type: "array", items: { type: "object", additionalProperties: true } } }
+      }
+    },
+    async () => {
+      return opts.deps.images.list();
+    }
+  );
+
+  app.post(
+    "/v1/images",
+    {
+      bodyLimit: BODY_LIMITS.jsonSmall,
+      schema: {
+        summary: "Create guest image metadata",
+        tags: ["images"],
+        body: {
+          type: "object",
+          required: ["name", "description"],
+          properties: {
+            name: { type: "string" },
+            description: { type: "string" }
+          }
+        },
+        response: { 201: { type: "object", additionalProperties: true } }
+      }
+    },
+    async (request, reply) => {
+      const body = request.body as { name?: string; description?: string } | undefined;
+      const name = String(body?.name ?? "").trim();
+      const description = String(body?.description ?? "").trim();
+      if (!name || !description) {
+        reply.code(400);
+        return { message: "name and description are required" };
+      }
+      const img = await opts.deps.images.create({ name, description });
+      reply.code(201);
+      return img;
+    }
+  );
+
+  app.post(
+    "/v1/images/:id/set-default",
+    {
+      schema: {
+        summary: "Set default guest image",
+        tags: ["images"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+        response: { 204: { type: "null" }, 404: { type: "object" } }
+      }
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const img = await opts.deps.images.getById(id);
+      if (!img) {
+        reply.code(404);
+        return { message: "Image not found" };
+      }
+      await opts.deps.images.setDefaultImageId(id);
+      reply.code(204);
+      return;
+    }
+  );
+
+  app.put(
+    "/v1/images/:id/kernel",
+    {
+      bodyLimit: BODY_LIMITS.imageBinary,
+      schema: {
+        summary: "Upload kernel (vmlinux)",
+        tags: ["images"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+        response: { 204: { type: "null" }, 400: { type: "object" }, 404: { type: "object" } }
+      }
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const img = await opts.deps.images.getById(id);
+      if (!img) {
+        reply.code(404);
+        return { message: "Image not found" };
+      }
+      const dir = opts.deps.images.imageDirForId(id);
+      await fs.mkdir(dir, { recursive: true });
+      const dest = path.join(dir, "vmlinux");
+      const bodyStream = request.body as any;
+      await writeStreamToFile(bodyStream, dest, BODY_LIMITS.imageBinary);
+      await opts.deps.images.markKernelUploaded(id, "vmlinux");
+      reply.code(204);
+      return;
+    }
+  );
+
+  app.put(
+    "/v1/images/:id/rootfs",
+    {
+      bodyLimit: BODY_LIMITS.imageBinary,
+      schema: {
+        summary: "Upload rootfs (ext4)",
+        tags: ["images"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+        response: { 204: { type: "null" }, 400: { type: "object" }, 404: { type: "object" } }
+      }
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const img = await opts.deps.images.getById(id);
+      if (!img) {
+        reply.code(404);
+        return { message: "Image not found" };
+      }
+      const dir = opts.deps.images.imageDirForId(id);
+      await fs.mkdir(dir, { recursive: true });
+      const dest = path.join(dir, "rootfs.ext4");
+      const bodyStream = request.body as any;
+      await writeStreamToFile(bodyStream, dest, BODY_LIMITS.imageBinary);
+      await opts.deps.images.markRootfsUploaded(id, "rootfs.ext4");
+      reply.code(204);
+      return;
+    }
+  );
+
+  app.delete(
+    "/v1/images/:id",
+    {
+      schema: {
+        summary: "Delete guest image",
+        tags: ["images"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+        response: { 204: { type: "null" }, 404: { type: "object" }, 409: { type: "object" } }
+      }
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const img = await opts.deps.images.getById(id);
+      if (!img) {
+        reply.code(404);
+        return { message: "Image not found" };
+      }
+      await opts.deps.images.delete(id);
+      reply.code(204);
+      return;
     }
   );
 
@@ -244,12 +400,19 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
                     memMb: { type: "number" },
                     allowIps: { type: "array", items: { type: "string" } },
                     outboundInternet: { type: "boolean" },
-                    snapshotId: { type: "string" }
+                    snapshotId: { type: "string" },
+                    imageId: { type: "string" },
+                    diskSizeMb: { type: "number" }
                   }
                 },
                 examples: {
-                  boot: { value: { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true } },
-                  fromSnapshot: { value: { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: "snap-<uuid>" } }
+                  boot: { value: { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, diskSizeMb: 512 } },
+                  withImage: {
+                    value: { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, imageId: "img-<uuid>", diskSizeMb: 512 }
+                  },
+                  fromSnapshot: {
+                    value: { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: "snap-<uuid>", diskSizeMb: 512 }
+                  }
                 }
               }
             }
@@ -263,11 +426,14 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
             memMb: { type: "number", description: "Memory in MiB" },
             allowIps: { type: "array", items: { type: "string" }, description: "Outbound allowlist (IPv4/CIDR)" },
             outboundInternet: { type: "boolean", description: "Enable outbound internet (still restricted to allowIps)" },
-            snapshotId: { type: "string", description: "Optional snapshot id created via POST /v1/vms/:id/snapshots" }
+            snapshotId: { type: "string", description: "Optional snapshot id created via POST /v1/vms/:id/snapshots" },
+            imageId: { type: "string", description: "Optional guest image id (defaults to the configured default image)" },
+            diskSizeMb: { type: "number", description: "Optional disk size (MiB). Must be >= base rootfs size." }
           },
           examples: [
-            { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true },
-            { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: "snap-<uuid>" }
+            { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, diskSizeMb: 512 },
+            { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, imageId: "img-<uuid>", diskSizeMb: 512 },
+            { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: "snap-<uuid>", diskSizeMb: 512 }
           ]
         },
         response: {
@@ -291,7 +457,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     },
     async (request, reply) => {
       const body = request.body as
-        | { cpu?: number; memMb?: number; allowIps?: string[]; outboundInternet?: boolean; snapshotId?: string }
+        | {
+            cpu?: number;
+            memMb?: number;
+            allowIps?: string[];
+            outboundInternet?: boolean;
+            snapshotId?: string;
+            imageId?: string;
+            diskSizeMb?: number;
+          }
         | undefined;
       if (!body || typeof body.cpu !== "number" || typeof body.memMb !== "number" || !Array.isArray(body.allowIps)) {
         reply.code(400);
@@ -302,7 +476,9 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         memMb: body.memMb,
         allowIps: body.allowIps,
         outboundInternet: body.outboundInternet,
-        snapshotId: body.snapshotId
+        snapshotId: body.snapshotId,
+        imageId: body.imageId,
+        diskSizeMb: body.diskSizeMb
       });
       reply.code(201);
       return vm;
@@ -543,7 +719,11 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
           additionalProperties: true,
           description: "tar.gz binary stream (request body is treated as raw bytes)"
         },
-        response: { 204: { type: "null" }, 400: { type: "object" } }
+        response: {
+          204: { type: "null" },
+          400: { type: "object", properties: { message: { type: "string" } }, additionalProperties: true },
+          413: { type: "object", properties: { message: { type: "string" } }, additionalProperties: true }
+        }
       }
     },
     async (request, reply) => {
@@ -553,10 +733,16 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         reply.code(400);
         return { message: "dest is required" };
       }
-      const body = request.body;
-      if (!Buffer.isBuffer(body)) {
-        reply.code(400);
-        return { message: "Expected binary body" };
+      const bodyStream = request.body as any;
+      let body: Buffer;
+      try {
+        body = await readStreamToBuffer(bodyStream, BODY_LIMITS.uploadCompressed);
+      } catch (err: any) {
+        if (err instanceof BodyTooLargeError || String(err?.message ?? err).includes("Body too large")) {
+          reply.code(413);
+          return { message: "Body too large" };
+        }
+        throw err;
       }
       try {
         await opts.deps.vmService.uploadFiles(id, dest, body);
@@ -566,7 +752,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         const msg = String(err?.message ?? err);
         if (msg.includes("status=400")) {
           reply.code(400);
-          return { message: "Invalid upload dest or archive" };
+          // Surface guest-agent details when available (helps debugging invalid archives).
+          return { message: msg };
         }
         throw err;
       }
@@ -608,9 +795,11 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         reply.code(400);
         return { message: "path is required" };
       }
+      request.log.info({ vmId: id, path }, "files.download requested");
       try {
         const data = await opts.deps.vmService.downloadFiles(id, path);
         reply.header("content-type", "application/gzip");
+        request.log.info({ vmId: id, bytes: data.length }, "files.download responding");
         return reply.send(data);
       } catch (err: any) {
         const msg = String(err?.message ?? err);

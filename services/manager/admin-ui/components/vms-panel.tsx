@@ -74,6 +74,7 @@ interface ApiVm {
   memMb: number
   outboundInternet: boolean
   createdAt: string
+  imageId?: string
 }
 
 export function VMsPanel() {
@@ -83,8 +84,9 @@ export function VMsPanel() {
   const [searchQuery, setSearchQuery] = useState("")
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [selectedVM, setSelectedVM] = useState<VM | null>(null)
-  const [newVM, setNewVM] = useState({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "" })
+  const [newVM, setNewVM] = useState({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "", imageId: "", diskSizeMb: 512 })
   const [vmToDelete, setVmToDelete] = useState<VM | null>(null)
+  const [images, setImages] = useState<Array<{ id: string; name: string; isDefault?: boolean }>>([])
 
   const apiKey = getStoredApiKey()
 
@@ -104,6 +106,16 @@ export function VMsPanel() {
       memMb: vm.memMb,
       allowInternet: Boolean(vm.outboundInternet),
       createdAt: vm.createdAt,
+      imageId: vm.imageId,
+    }
+  }
+
+  const refreshImages = async () => {
+    try {
+      const data = await apiGetJson<any[]>("/v1/images", apiKey)
+      setImages((data ?? []).map((x) => ({ id: String(x.id), name: String(x.name), isDefault: Boolean(x.isDefault) })))
+    } catch {
+      // ignore; images are optional for UI rendering
     }
   }
 
@@ -122,6 +134,7 @@ export function VMsPanel() {
 
   useEffect(() => {
     refresh()
+    if (apiKey) refreshImages()
   }, [apiKey])
 
   const handleCreateVM = async () => {
@@ -131,11 +144,13 @@ export function VMsPanel() {
       memMb: newVM.memMb,
       allowIps,
       outboundInternet: newVM.allowInternet,
+      diskSizeMb: newVM.diskSizeMb,
     }
     if (newVM.snapshotId) payload.snapshotId = newVM.snapshotId
+    if (newVM.imageId) payload.imageId = newVM.imageId
     await apiRequestJson("POST", "/v1/vms", apiKey, payload)
     setCreateDialogOpen(false)
-    setNewVM({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "" })
+    setNewVM({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "", imageId: "", diskSizeMb: 512 })
     await refresh()
   }
 
@@ -279,6 +294,41 @@ export function VMsPanel() {
                     onChange={(e) => setNewVM({ ...newVM, snapshotId: e.target.value })}
                     className="bg-input border-border text-foreground placeholder:text-muted-foreground"
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="image" className="text-foreground">
+                      Image (optional)
+                    </Label>
+                    <select
+                      id="image"
+                      value={newVM.imageId}
+                      onChange={(e) => setNewVM({ ...newVM, imageId: e.target.value })}
+                      className="w-full h-10 rounded-md border border-border bg-input px-3 text-sm text-foreground"
+                    >
+                      <option value="">Default image</option>
+                      {images.map((img) => (
+                        <option key={img.id} value={img.id}>
+                          {img.name}
+                          {img.isDefault ? " (default)" : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="disk" className="text-foreground">
+                      Disk size (MB)
+                    </Label>
+                    <Input
+                      id="disk"
+                      type="number"
+                      min={128}
+                      step={128}
+                      value={newVM.diskSizeMb}
+                      onChange={(e) => setNewVM({ ...newVM, diskSizeMb: Number.parseInt(e.target.value) || 512 })}
+                      className="bg-input border-border text-foreground"
+                    />
+                  </div>
                 </div>
                 <div className="flex items-center justify-between">
                   <Label htmlFor="internet" className="text-foreground">

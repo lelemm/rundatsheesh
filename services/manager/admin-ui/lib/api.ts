@@ -49,4 +49,27 @@ export async function apiRequestJson<T>(
   return (await res.json()) as T
 }
 
+export async function apiUploadBinary(
+  method: "PUT" | "POST",
+  path: string,
+  apiKey: string | null,
+  data: Blob | ArrayBuffer,
+  contentType = "application/octet-stream",
+): Promise<void> {
+  const headers: Record<string, string> = {
+    ...(apiKey ? { "X-API-Key": apiKey } : {}),
+    "content-type": contentType,
+  }
+  const res = await fetch(path, {
+    method,
+    headers,
+    body: data instanceof Blob ? data : new Blob([data], { type: contentType }),
+    credentials: "same-origin",
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => "")
+    throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`)
+  }
+}
+
 

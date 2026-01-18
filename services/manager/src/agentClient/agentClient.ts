@@ -123,7 +123,8 @@ export class VsockAgentClient implements AgentClient {
       throw new Error(`Agent request returned no HTTP response (${method} ${pathName})`);
     }
     if (statusCode < 200 || statusCode >= 300) {
-      throw new Error(`Agent request failed (${method} ${pathName}) status=${statusCode}`);
+      const errText = responseBody.toString("utf-8", 0, Math.min(responseBody.length, 2048));
+      throw new Error(`Agent request failed (${method} ${pathName}) status=${statusCode}: ${errText}`);
     }
     return responseBody;
   }

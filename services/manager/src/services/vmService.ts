@@ -5,6 +5,7 @@ import type { VmCreateRequest, VmProvisionMode, VmPublic, VmRecord } from "../ty
 import type { SnapshotMeta } from "../types/snapshot.js";
 import { HttpError } from "../api/httpErrors.js";
 import type { ActivityService } from "../telemetry/activityService.js";
+import type { ImageService } from "./imageService.js";
 
 export interface VmServiceOptions {
   store: VmStore;
@@ -12,6 +13,7 @@ export interface VmServiceOptions {
   network: NetworkManager;
   agentClient: AgentClient;
   storage: StorageProvider;
+  images: ImageService;
   activity?: ActivityService;
   snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   vsockCidStart?: number;
@@ -31,6 +33,7 @@ export class VmService {
   private readonly network: NetworkManager;
   private readonly agentClient: AgentClient;
   private readonly storage: StorageProvider;
+  private readonly images: ImageService;
   private readonly activity?: ActivityService;
   private readonly snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   private readonly limits: NonNullable<VmServiceOptions["limits"]>;
@@ -42,6 +45,7 @@ export class VmService {
     this.network = options.network;
     this.agentClient = options.agentClient;
     this.storage = options.storage;
+    this.images = options.images;
     this.activity = options.activity;
     this.snapshots = options.snapshots;
     this.limits = options.limits ?? {
@@ -72,6 +76,11 @@ export class VmService {
       throw new HttpError(429, `VM quota exceeded (maxVms=${this.limits.maxVms})`);
     }
 
+    const mbToBytes = (mb: number) => Math.floor(mb * 1024 * 1024);
+    const minDiskMb = (bytes: number) => Math.ceil(bytes / (1024 * 1024));
+    const DEFAULT_DISK_MB = 512;
+    const DEFAULT_DISK_HEADROOM_MB = 256;
+
     const tTotalStart = Date.now();
     const id = randomUUID();
     const createdAt = new Date().toISOString();
@@ -80,6 +89,7 @@ export class VmService {
     let rootfsPath = "";
     let kernelPath = "";
     let logsDir = "";
+    let imageId: string | undefined;
     if (request.snapshotId) {
       const snap = await this.storage.getSnapshotArtifactPaths(request.snapshotId);
       const meta = await this.storage.readSnapshotMeta(request.snapshotId);
@@ -95,12 +105,41 @@ export class VmService {
       if (!hasAll) {
         throw new Error("Snapshot artifacts missing on disk");
       }
-      const prepared = await this.storage.prepareVmStorageFromDisk(id, snap.diskPath);
+      const diskBytes = (await fs.stat(snap.diskPath)).size;
+      const resolved = await this.images.resolveForVmCreate(meta.imageId ?? request.imageId);
+      imageId = resolved.imageId;
+      const minMb = minDiskMb(diskBytes);
+      const requestedMb =
+        typeof request.diskSizeMb === "number"
+          ? Math.max(request.diskSizeMb, minMb)
+          : Math.max(DEFAULT_DISK_MB, minMb + DEFAULT_DISK_HEADROOM_MB);
+      if (requestedMb < minDiskMb(diskBytes)) {
+        throw new HttpError(400, `diskSizeMb too small (min=${minDiskMb(diskBytes)})`);
+      }
+      const prepared = await this.storage.prepareVmStorageFromDisk(id, {
+        kernelSrcPath: resolved.kernelSrcPath,
+        diskSrcPath: snap.diskPath,
+        diskSizeBytes: mbToBytes(requestedMb)
+      });
       rootfsPath = prepared.rootfsPath;
       logsDir = prepared.logsDir;
       kernelPath = prepared.kernelPath;
     } else {
-      const prepared = await this.storage.prepareVmStorage(id);
+      const resolved = await this.images.resolveForVmCreate(request.imageId);
+      imageId = resolved.imageId;
+      const minMb = minDiskMb(resolved.baseRootfsBytes);
+      const requestedMb =
+        typeof request.diskSizeMb === "number"
+          ? Math.max(request.diskSizeMb, minMb)
+          : Math.max(DEFAULT_DISK_MB, minMb + DEFAULT_DISK_HEADROOM_MB);
+      if (requestedMb < minMb) {
+        throw new HttpError(400, `diskSizeMb too small (min=${minMb})`);
+      }
+      const prepared = await this.storage.prepareVmStorage(id, {
+        kernelSrcPath: resolved.kernelSrcPath,
+        baseRootfsPath: resolved.baseRootfsPath,
+        diskSizeBytes: mbToBytes(requestedMb)
+      });
       rootfsPath = prepared.rootfsPath;
       logsDir = prepared.logsDir;
       kernelPath = prepared.kernelPath;
@@ -117,6 +156,7 @@ export class VmService {
       vsockCid: this.allocateVsockCid(),
       outboundInternet: request.outboundInternet ?? false,
       allowIps: request.allowIps,
+      imageId,
       rootfsPath,
       kernelPath,
       logsDir,
@@ -305,6 +345,7 @@ export class VmService {
       createdAt: new Date().toISOString(),
       cpu: vm.cpu,
       memMb: vm.memMb,
+      imageId: vm.imageId,
       sourceVmId: vm.id,
       hasDisk: true
     };
@@ -463,6 +504,14 @@ function validateCreateRequest(req: VmCreateRequest, limits: VmService["limits"]
   if (!Number.isFinite(req.memMb) || req.memMb <= 0 || req.memMb > limits.maxMemMb) {
     throw new HttpError(400, `Invalid memMb (maxMemMb=${limits.maxMemMb})`);
   }
+  if (typeof req.diskSizeMb === "number") {
+    if (!Number.isFinite(req.diskSizeMb) || req.diskSizeMb <= 0) {
+      throw new HttpError(400, "Invalid diskSizeMb");
+    }
+    if (req.diskSizeMb > 1024 * 1024) {
+      throw new HttpError(400, "diskSizeMb too large");
+    }
+  }
   if (!Array.isArray(req.allowIps)) {
     throw new HttpError(400, "allowIps must be an array");
   }
@@ -485,7 +534,8 @@ function toPublic(vm: VmRecord): VmPublic {
     guestIp: vm.guestIp,
     outboundInternet: vm.outboundInternet,
     createdAt: vm.createdAt,
-    provisionMode: vm.provisionMode
+    provisionMode: vm.provisionMode,
+    imageId: vm.imageId
   };
 }
 

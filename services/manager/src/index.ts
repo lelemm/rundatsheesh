@@ -14,6 +14,7 @@ import { initOtel, shutdownOtel } from "./telemetry/otel.js";
 import { ApiKeyService } from "./apiKey/apiKeyService.js";
 import fs from "node:fs/promises";
 import { computeSnapshotVersion } from "./snapshots/snapshotVersion.js";
+import { ImageService } from "./services/imageService.js";
 
 async function main() {
   const env = loadEnv();
@@ -51,16 +52,20 @@ async function main() {
     limits: { maxJsonResponseBytes: env.vsock.maxJsonResponseBytes, maxBinaryResponseBytes: env.vsock.maxBinaryResponseBytes }
   });
   const storage = new LocalStorageProvider({
-    baseRootfsPath: env.baseRootfsPath,
     storageRoot: env.storageRoot,
-    kernelSrcPath: env.kernelPath,
     jailerChrootBaseDir: env.jailer.chrootBaseDir,
     rootfsCloneMode: env.rootfsCloneMode
   });
 
-  const snapshotVersion = env.enableSnapshots
-    ? await computeSnapshotVersion({ kernelPath: env.kernelPath, baseRootfsPath: env.baseRootfsPath })
-    : "";
+  const images = new ImageService(db.db as any, db.guestImages as any, db.settings as any, db.vms as any, env.imagesDir, {
+    kernelPath: env.kernelPath,
+    baseRootfsPath: env.baseRootfsPath
+  });
+
+  const snapshotVersion =
+    env.enableSnapshots && env.kernelPath && env.baseRootfsPath
+      ? await computeSnapshotVersion({ kernelPath: env.kernelPath, baseRootfsPath: env.baseRootfsPath })
+      : "";
 
   const vmService = new VmService({
     store,
@@ -68,6 +73,7 @@ async function main() {
     network,
     agentClient,
     storage,
+    images,
     limits: env.limits,
     activity: activityService,
     snapshots: env.enableSnapshots
@@ -82,12 +88,16 @@ async function main() {
     agentClient,
     storage,
     storageRoot: env.storageRoot,
+    images,
     vmService,
     activityService,
     apiKeyService
   };
 
   if (process.argv[2] === "snapshot-build") {
+    if (!env.kernelPath || !env.baseRootfsPath) {
+      throw new Error("snapshot-build requires KERNEL_PATH and BASE_ROOTFS_PATH");
+    }
     await buildTemplateSnapshot({
       firecracker,
       network,
@@ -128,7 +138,16 @@ async function buildTemplateSnapshot(input: {
   const templateId = `template-${input.version}`;
   const createdAt = new Date().toISOString();
   const { guestIp, tapName } = await input.network.allocateIp();
-  const { rootfsPath, logsDir, kernelPath } = await input.storage.prepareVmStorage(templateId);
+  // Template snapshot build remains tied to the legacy image env vars.
+  const kernelPathEnv = process.env.KERNEL_PATH ?? "";
+  const baseRootfsPathEnv = process.env.BASE_ROOTFS_PATH ?? "";
+  if (!kernelPathEnv || !baseRootfsPathEnv) {
+    throw new Error("snapshot-build requires KERNEL_PATH and BASE_ROOTFS_PATH");
+  }
+  const { rootfsPath, logsDir, kernelPath } = await input.storage.prepareVmStorage(templateId, {
+    kernelSrcPath: kernelPathEnv,
+    baseRootfsPath: baseRootfsPathEnv
+  });
   const vm = {
     id: templateId,
     state: "CREATED",

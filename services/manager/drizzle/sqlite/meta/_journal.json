@@ -22,6 +22,13 @@
       "when": 1768630640784,
       "tag": "0002_perfect_nemesis",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1768752910547,
+      "tag": "0003_swift_wasp",
+      "breakpoints": true
     }
   ]
 }

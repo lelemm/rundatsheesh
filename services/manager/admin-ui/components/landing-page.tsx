@@ -28,32 +28,32 @@ export function LandingPage() {
   }
 
   const codeExamples = {
-    createVm: `curl -X POST http://localhost:8080/v1/vms \\
-  -H "Authorization: Bearer $API_KEY" \\
+    createVm: `curl -X POST http://localhost:3000/v1/vms \\
+  -H "X-API-Key: $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "template_id": "python-3.11",
-    "memory_mb": 512,
-    "vcpu_count": 2
+    "cpu": 1,
+    "memMb": 512,
+    "allowIps": ["172.16.0.1/32"],
+    "outboundInternet": false,
+    "diskSizeMb": 512
   }'`,
-    execCommand: `curl -X POST http://localhost:8080/v1/vms/{vm_id}/exec \\
-  -H "Authorization: Bearer $API_KEY" \\
+    execCommand: `curl -X POST http://localhost:3000/v1/vms/{vm_id}/exec \\
+  -H "X-API-Key: $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "command": "node -e \\"console.log([1,2,3,4,5].reduce((a,b)=>a+b,0))\\""
+    "cmd": "echo hello && id -u"
   }'`,
-    createSnapshot: `curl -X POST http://localhost:8080/v1/vms/{vm_id}/snapshot \\
-  -H "Authorization: Bearer $API_KEY" \\
+    createSnapshot: `curl -X POST http://localhost:3000/v1/vms/{vm_id}/snapshots \\
+  -H "X-API-Key: $API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{
-    "snapshot_id": "clean-state-v1"
-  }'`,
+  -d '{}'`,
     typescriptSdk: `import { RunDatSheesh } from "rundatsheesh";
 
-const client = new RunDatSheesh({ baseUrl: "http://localhost:8080" });
+const client = new RunDatSheesh({ baseUrl: "http://localhost:3000" });
 
 // Create a VM
-const vm = await client.vms.create({ cpu: 1, memMb: 512, allowIps: [] });
+const vm = await client.vms.create({ cpu: 1, memMb: 512, allowIps: [], diskSizeMb: 512 });
 
 // Run TypeScript inside the VM (Deno)
 const result = await client.vms.runTs(vm.id, { code: "console.log(2 + 2)" });
@@ -64,7 +64,7 @@ await client.vms.destroy(vm.id);`,
     nodeSdk: `import { RunDatSheesh } from 'rundatsheesh';
 
 const client = new RunDatSheesh({ 
-  baseUrl: 'http://localhost:8080' 
+  baseUrl: 'http://localhost:3000' 
 });
 
 // Create a VM from template
@@ -81,15 +81,28 @@ await vm.upload('/app/data.json', jsonBuffer);
 
 // Clean up
 await vm.delete();`,
-    dockerInstall: `# Pull and run with Docker
-docker pull ghcr.io/rundatsheesh/rundatsheesh:latest
+    dockerInstall: `# Install via docker compose (recommended)
+cp env.example .env
 
-docker run -d \\
-  --name rundatsheesh \\
-  --privileged \\
-  -p 8080:8080 \\
-  -v /var/lib/rundatsheesh:/data \\
-  ghcr.io/rundatsheesh/rundatsheesh:latest`,
+# Edit .env (required)
+# - API_KEY, ADMIN_EMAIL, ADMIN_PASSWORD
+# - RUN_DAT_SHEESH_DATA_DIR (optional, defaults to ./data)
+
+mkdir -p ./data ./images
+
+# Start (dev mode on :3000)
+docker compose -f docker-compose.dev.yml up --build
+
+# Build guest images locally (optional helper)
+make guest-images
+
+# Upload images in the Admin UI
+# 1) Open: http://localhost:3000/login/
+# 2) Go to: Images
+# 3) Create image + upload:
+#    - dist/images/debian/vmlinux + dist/images/debian/rootfs.ext4
+#    - dist/images/alpine/vmlinux + dist/images/alpine/rootfs.ext4
+# 4) Set a default image, then create VMs`,
     binaryInstall: `# Download latest release
 curl -fsSL https://get.rundatsheesh.dev | sh
 

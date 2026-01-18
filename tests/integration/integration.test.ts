@@ -9,6 +9,7 @@ const API_KEY = process.env.API_KEY ?? "dev-key";
 const MANAGER_BASE = process.env.MANAGER_BASE ?? "http://127.0.0.1:3000";
 const MAX_CREATE_MS = process.env.MAX_CREATE_MS ? Number(process.env.MAX_CREATE_MS) : null;
 const ENABLE_SNAPSHOTS = (process.env.ENABLE_SNAPSHOTS ?? "false").toLowerCase() === "true";
+const VM_IMAGE_ID = process.env.VM_IMAGE_ID || "";
 
 function mustExec(cmd: string, args: string[], opts?: { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: "inherit" | "pipe" }) {
   return execFileSync(cmd, args, {
@@ -43,11 +44,15 @@ async function apiJson<T>(method: string, url: string, body?: unknown): Promise<
 }
 
 async function apiBinary(method: string, url: string, body?: Uint8Array): Promise<{ status: number; buf: Buffer }> {
+  const headers: Record<string, string> = { "X-API-Key": API_KEY };
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/gzip";
+  }
   const res = await fetch(url, {
     method,
-    headers: { "X-API-Key": API_KEY, "Content-Type": "application/gzip" },
+    headers,
     // Node's fetch supports Uint8Array, but lib.dom types can be picky depending on TS config.
-    body: body as any
+    body: body === undefined ? undefined : (body as any)
   });
   const ab = await res.arrayBuffer();
   return { status: res.status, buf: Buffer.from(ab) };
@@ -68,7 +73,10 @@ type SnapshotMeta = { id: string; kind: string; createdAt: string; cpu: number; 
 
 async function createVm(payload: { cpu: number; memMb: number; allowIps: string[]; outboundInternet: boolean }): Promise<VmPublic> {
   const started = Date.now();
-  const { status, json } = await apiJson<VmPublic>("POST", `${MANAGER_BASE}/v1/vms`, payload);
+  const { status, json } = await apiJson<VmPublic>("POST", `${MANAGER_BASE}/v1/vms`, {
+    ...payload,
+    ...(VM_IMAGE_ID ? { imageId: VM_IMAGE_ID } : {})
+  });
   expect(status).toBe(201);
   expect(json.id).toBeTruthy();
   const elapsedMs = Date.now() - started;
@@ -112,6 +120,10 @@ async function listSnapshots(): Promise<SnapshotMeta[]> {
 async function vmExec(vmId: string, cmd: string): Promise<ExecResult> {
   const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/exec`, { cmd });
   expect(status).toBe(200);
+  if (json.exitCode !== 0) {
+    // eslint-disable-next-line no-console
+    console.error("[it] exec nonzero", { vmId, cmd, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr });
+  }
   return json;
 }
 
@@ -223,17 +235,22 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   });
 
   it("exec: mkdir inside /home/user and ls parent shows it", async () => {
-    const mkdirLs = await vmExec(vmOk, "mkdir -p /home/user/integration-test-dir && ls -1 /home/user");
+    // NOTE: /v1/vms/:id/exec is run inside a chroot rooted at /home/user, so paths should be relative to that root.
+    const mkdirLs = await vmExec(vmOk, "mkdir -p /integration-test-dir && ls -1 /");
     expect(mkdirLs.exitCode).toBe(0);
     expect(mkdirLs.stdout.split("\n").map((s) => s.trim()).filter(Boolean)).toContain("integration-test-dir");
   });
 
   it("files: upload succeeds to /home/user", async () => {
-    const { status } = await apiBinary(
+    const { status, buf } = await apiBinary(
       "POST",
       `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user/project")}`,
       uploadBuf ?? undefined
     );
+    if (status !== 204) {
+      // eslint-disable-next-line no-console
+      console.error("[it] upload failed", { status, body: buf.toString("utf-8", 0, 2048) });
+    }
     expect(status).toBe(204);
   });
 
@@ -285,11 +302,15 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
 
   it("run-ts: can import an uploaded SDK module from /home/user", async () => {
     // Upload SDK + app files into /home/user (tar contains sdk/ and app/ directories).
-    const { status } = await apiBinary(
+    const { status, buf } = await apiBinary(
       "POST",
       `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user")}`,
       sdkUploadBuf ?? undefined
     );
+    if (status !== 204) {
+      // eslint-disable-next-line no-console
+      console.error("[it] sdk upload failed", { status, body: buf.toString("utf-8", 0, 2048) });
+    }
     expect(status).toBe(204);
 
     const res = await vmRunTsPath(vmOk, "/home/user/app/main.ts");

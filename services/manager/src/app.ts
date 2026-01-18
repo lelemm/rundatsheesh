@@ -209,7 +209,7 @@ export function buildApp(options: BuildAppOptions) {
 
   app.addContentTypeParser(
     ["application/gzip", "application/x-tar", "application/octet-stream"],
-    { parseAs: "buffer" },
+    // Leave payload as a stream; routes can buffer with limits or stream to disk.
     (_req, body, done) => done(null, body)
   );
 
