@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import type { View } from "./admin-shell"
-import { LayoutDashboard, Server, Camera, Layers, KeyRound, HardDrive } from "lucide-react"
+import { LayoutDashboard, Server, Camera, Layers, KeyRound, HardDrive, BookOpen, Webhook } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 
@@ -18,6 +18,7 @@ const navItems = [
   { id: "templates" as View, label: "Templates", icon: Layers },
   { id: "images" as View, label: "Images", icon: HardDrive },
   { id: "apiKeys" as View, label: "API Keys", icon: KeyRound },
+  { id: "webhooks" as View, label: "Webhooks", icon: Webhook },
 ]
 
 export function Sidebar({ currentView, onViewChange }: SidebarProps) {
@@ -56,6 +57,18 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
               </button>
             </li>
           ))}
+          <li className="pt-2">
+            <a
+              href="/docs/"
+              className={cn(
+                "w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm transition-colors",
+                "text-muted-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-foreground",
+              )}
+            >
+              <BookOpen className="w-4 h-4" />
+              Docs
+            </a>
+          </li>
         </ul>
       </nav>
 

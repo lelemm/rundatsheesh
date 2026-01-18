@@ -15,10 +15,19 @@ export interface ActivityEvent {
 }
 
 export class ActivityService {
+  private readonly subscribers = new Set<(ev: ActivityEvent) => void>();
+
   constructor(
     private readonly db: AnyDb,
     private readonly activityEvents: AnyTable
   ) {}
+
+  subscribe(handler: (ev: ActivityEvent) => void): () => void {
+    this.subscribers.add(handler);
+    return () => {
+      this.subscribers.delete(handler);
+    };
+  }
 
   async logEvent(input: {
     type: string;
@@ -47,6 +56,14 @@ export class ActivityService {
       message: ev.message,
       metaJson: ev.metaJson ?? null
     });
+
+    for (const sub of this.subscribers) {
+      try {
+        sub(ev);
+      } catch {
+        // best-effort; never break logEvent() due to a subscriber
+      }
+    }
 
     return ev;
   }

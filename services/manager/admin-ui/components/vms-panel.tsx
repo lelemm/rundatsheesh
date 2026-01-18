@@ -55,11 +55,12 @@ import {
   Play,
   Square,
 } from "lucide-react"
-import { apiGetJson, apiRequestJson, getStoredApiKey } from "@/lib/api"
+import { apiGetJson, apiRequestJson } from "@/lib/api"
+import { subscribeAdminEvents } from "@/lib/admin-events"
 
 interface VM {
   id: string
-  status: "running" | "stopped" | "creating"
+  status: "running" | "stopped" | "creating" | "starting" | "stopping"
   cpu: number
   memMb: number
   allowInternet: boolean
@@ -87,8 +88,7 @@ export function VMsPanel() {
   const [newVM, setNewVM] = useState({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "", imageId: "", diskSizeMb: 512 })
   const [vmToDelete, setVmToDelete] = useState<VM | null>(null)
   const [images, setImages] = useState<Array<{ id: string; name: string; isDefault?: boolean }>>([])
-
-  const apiKey = getStoredApiKey()
+  const [pendingByVmId, setPendingByVmId] = useState<Record<string, "start" | "stop">>({})
 
   const filteredVMs = useMemo(
     () => vms.filter((vm) => vm.id.toLowerCase().includes(searchQuery.toLowerCase())),
@@ -98,7 +98,15 @@ export function VMsPanel() {
   const toVm = (vm: ApiVm): VM => {
     const state = vm.state.toUpperCase()
     const status: VM["status"] =
-      state === "RUNNING" ? "running" : state === "STOPPED" ? "stopped" : "creating"
+      state === "RUNNING"
+        ? "running"
+        : state === "STOPPED"
+          ? "stopped"
+          : state === "STARTING"
+            ? "starting"
+            : state === "STOPPING"
+              ? "stopping"
+              : "creating"
     return {
       id: vm.id,
       status,
@@ -112,7 +120,7 @@ export function VMsPanel() {
 
   const refreshImages = async () => {
     try {
-      const data = await apiGetJson<any[]>("/v1/images", apiKey)
+      const data = await apiGetJson<any[]>("/v1/images")
       setImages((data ?? []).map((x) => ({ id: String(x.id), name: String(x.name), isDefault: Boolean(x.isDefault) })))
     } catch {
       // ignore; images are optional for UI rendering
@@ -123,7 +131,7 @@ export function VMsPanel() {
     setLoading(true)
     setError(null)
     try {
-      const data = await apiGetJson<ApiVm[]>("/v1/vms", apiKey)
+      const data = await apiGetJson<ApiVm[]>("/v1/vms")
       setVMs(data.map(toVm))
     } catch (e: any) {
       setError(String(e?.message ?? e))
@@ -134,8 +142,24 @@ export function VMsPanel() {
 
   useEffect(() => {
     refresh()
-    if (apiKey) refreshImages()
-  }, [apiKey])
+    refreshImages()
+  }, [])
+
+  useEffect(() => {
+    return subscribeAdminEvents((ev) => {
+      if (ev.entityType !== "vm") return
+      if (!ev.entityId) return
+      if (ev.type === "vm.started" || ev.type === "vm.stopped") {
+        setPendingByVmId((p) => {
+          if (!p[ev.entityId!]) return p
+          const next = { ...p }
+          delete next[ev.entityId!]
+          return next
+        })
+        void refresh()
+      }
+    })
+  }, [vms])
 
   const handleCreateVM = async () => {
     const allowIps = newVM.allowInternet ? ["0.0.0.0/0"] : []
@@ -148,14 +172,14 @@ export function VMsPanel() {
     }
     if (newVM.snapshotId) payload.snapshotId = newVM.snapshotId
     if (newVM.imageId) payload.imageId = newVM.imageId
-    await apiRequestJson("POST", "/v1/vms", apiKey, payload)
+    await apiRequestJson("POST", "/v1/vms", payload)
     setCreateDialogOpen(false)
     setNewVM({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "", imageId: "", diskSizeMb: 512 })
     await refresh()
   }
 
   const handleDeleteVM = async (id: string) => {
-    await apiRequestJson("DELETE", `/v1/vms/${id}`, apiKey)
+    await apiRequestJson("DELETE", `/v1/vms/${id}`)
     if (selectedVM?.id === id) setSelectedVM(null)
     setVmToDelete(null)
     await refresh()
@@ -165,10 +189,13 @@ export function VMsPanel() {
     e.stopPropagation()
     const vm = vms.find((v) => v.id === id)
     if (!vm) return
+    if (pendingByVmId[id]) return
     if (vm.status === "running") {
-      await apiRequestJson("POST", `/v1/vms/${id}/stop`, apiKey)
+      setPendingByVmId((p) => ({ ...p, [id]: "stop" }))
+      await apiRequestJson("POST", `/v1/vms/${id}/stop`)
     } else {
-      await apiRequestJson("POST", `/v1/vms/${id}/start`, apiKey)
+      setPendingByVmId((p) => ({ ...p, [id]: "start" }))
+      await apiRequestJson("POST", `/v1/vms/${id}/start`)
     }
     await refresh()
   }
@@ -179,6 +206,8 @@ export function VMsPanel() {
         return "bg-success"
       case "stopped":
         return "bg-muted-foreground"
+      case "starting":
+      case "stopping":
       case "creating":
         return "bg-warning animate-pulse"
     }
@@ -196,6 +225,18 @@ export function VMsPanel() {
         return (
           <Badge variant="outline" className="border-muted-foreground/50 text-muted-foreground">
             Stopped
+          </Badge>
+        )
+      case "starting":
+        return (
+          <Badge variant="outline" className="border-warning/50 text-warning">
+            Starting…
+          </Badge>
+        )
+      case "stopping":
+        return (
+          <Badge variant="outline" className="border-warning/50 text-warning">
+            Stopping…
           </Badge>
         )
       case "creating":
@@ -413,7 +454,7 @@ export function VMsPanel() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    {vm.status !== "creating" && (
+                    {vm.status !== "creating" && vm.status !== "starting" && vm.status !== "stopping" && (
                       <Button
                         variant="ghost"
                         size="icon"
@@ -424,6 +465,7 @@ export function VMsPanel() {
                         }`}
                         onClick={(e) => handleToggleVM(vm.id, e)}
                         title={vm.status === "running" ? "Stop VM" : "Start VM"}
+                        disabled={Boolean(pendingByVmId[vm.id])}
                       >
                         {vm.status === "running" ? <Square className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                       </Button>

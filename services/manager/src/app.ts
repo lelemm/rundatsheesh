@@ -63,7 +63,8 @@ export function buildApp(options: BuildAppOptions) {
     timeWindow: "1 minute",
     allowList: (req) => {
       const url = req.raw.url ?? req.url;
-      return url === "/openapi.json" || url.startsWith("/docs");
+      // Public docs endpoints. Keep them out of global rate limits so the UIs can load assets smoothly.
+      return url === "/openapi.json" || url.startsWith("/docs") || url.startsWith("/swagger");
     }
   });
 
@@ -119,7 +120,7 @@ export function buildApp(options: BuildAppOptions) {
   });
 
   app.register(swaggerUi, {
-    routePrefix: "/docs",
+    routePrefix: "/swagger",
     uiConfig: {
       docExpansion: "list"
     }
@@ -191,11 +192,18 @@ export function buildApp(options: BuildAppOptions) {
   // SPA-like fallback: serve index.html for non-API, non-doc routes when a file isn't found.
   app.setNotFoundHandler(async (request, reply) => {
     const url = request.raw.url ?? request.url;
-    if (url.startsWith("/v1/") || url.startsWith("/docs") || url === "/openapi.json") {
+    const accept = request.headers["accept"] ?? "";
+
+    // Docs SPA fallback: serve the embedded Docusaurus index for HTML navigations.
+    // Static assets (js/css/images) should 404 normally if missing.
+    if (url.startsWith("/docs") && typeof accept === "string" && accept.includes("text/html")) {
+      return reply.sendFile("docs/index.html");
+    }
+
+    if (url.startsWith("/v1/") || url.startsWith("/swagger") || url === "/openapi.json") {
       reply.code(404);
       return reply.send({ message: "Not Found" });
     }
-    const accept = request.headers["accept"] ?? "";
     if (typeof accept === "string" && accept.includes("text/html")) {
       return reply.sendFile("index.html");
     }

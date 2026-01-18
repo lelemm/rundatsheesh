@@ -26,8 +26,19 @@ build-image:
 	./scripts/build-manager-image.sh
 
 publish:
-	IMAGE_NAME=lelemm/rundatsheesh:latest ./scripts/build-manager-image.sh
-	docker push lelemm/rundatsheesh:latest
+	@bash -lc 'set -euo pipefail; \
+	IMAGE_REPO="lelemm/rundatsheesh"; \
+	GIT_SHA="$$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"; \
+	PUSH="$${PUSH:-1}"; \
+	echo "[publish] building $$IMAGE_REPO:latest and $$IMAGE_REPO:$$GIT_SHA (no-cache)"; \
+	NO_CACHE=1 PULL=1 IMAGE_NAME="$$IMAGE_REPO:latest" ./scripts/build-manager-image.sh; \
+	docker tag "$$IMAGE_REPO:latest" "$$IMAGE_REPO:$$GIT_SHA"; \
+	if [ "$$PUSH" = "1" ]; then \
+	  docker push "$$IMAGE_REPO:latest"; \
+	  docker push "$$IMAGE_REPO:$$GIT_SHA"; \
+	else \
+	  echo "[publish] PUSH=0, skipping docker push"; \
+	fi'
 
 unit:
 	cd services/manager && npm test

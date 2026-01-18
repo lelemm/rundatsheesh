@@ -85,6 +85,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         return { message: "name and description are required" };
       }
       const img = await opts.deps.images.create({ name, description });
+      await opts.deps.activityService
+        ?.logEvent({
+          type: "image.created",
+          entityType: "image",
+          entityId: img.id,
+          message: "Image created",
+          meta: { name }
+        })
+        .catch(() => undefined);
       reply.code(201);
       return img;
     }
@@ -108,6 +117,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         return { message: "Image not found" };
       }
       await opts.deps.images.setDefaultImageId(id);
+      await opts.deps.activityService
+        ?.logEvent({
+          type: "image.default_set",
+          entityType: "image",
+          entityId: id,
+          message: "Default image set",
+          meta: { imageId: id }
+        })
+        .catch(() => undefined);
       reply.code(204);
       return;
     }
@@ -137,6 +155,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       const bodyStream = request.body as any;
       await writeStreamToFile(bodyStream, dest, BODY_LIMITS.imageBinary);
       await opts.deps.images.markKernelUploaded(id, "vmlinux");
+      await opts.deps.activityService
+        ?.logEvent({
+          type: "image.kernel_uploaded",
+          entityType: "image",
+          entityId: id,
+          message: "Image kernel uploaded",
+          meta: { imageId: id, filename: "vmlinux" }
+        })
+        .catch(() => undefined);
       reply.code(204);
       return;
     }
@@ -166,6 +193,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       const bodyStream = request.body as any;
       await writeStreamToFile(bodyStream, dest, BODY_LIMITS.imageBinary);
       await opts.deps.images.markRootfsUploaded(id, "rootfs.ext4");
+      await opts.deps.activityService
+        ?.logEvent({
+          type: "image.rootfs_uploaded",
+          entityType: "image",
+          entityId: id,
+          message: "Image rootfs uploaded",
+          meta: { imageId: id, filename: "rootfs.ext4" }
+        })
+        .catch(() => undefined);
       reply.code(204);
       return;
     }
@@ -189,6 +225,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         return { message: "Image not found" };
       }
       await opts.deps.images.delete(id);
+      await opts.deps.activityService
+        ?.logEvent({
+          type: "image.deleted",
+          entityType: "image",
+          entityId: id,
+          message: "Image deleted",
+          meta: { imageId: id }
+        })
+        .catch(() => undefined);
       reply.code(204);
       return;
     }
@@ -218,6 +263,240 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     }
   );
 
+  app.get(
+    "/v1/admin/events",
+    {
+      schema: {
+        summary: "Admin events (SSE)",
+        description: "Streams activity events as Server-Sent Events (SSE).",
+        tags: ["admin"],
+        response: { 200: { type: "string" }, 401: { type: "object" } }
+      }
+    },
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const svc = opts.deps.activityService;
+      if (!svc) {
+        reply.code(503);
+        return { message: "Activity service not available" };
+      }
+
+      const raw = reply.raw;
+      reply.hijack();
+
+      raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      raw.setHeader("Cache-Control", "no-cache, no-transform");
+      raw.setHeader("Connection", "keep-alive");
+      raw.flushHeaders?.();
+
+      const safeJsonParse = (s: string | undefined) => {
+        if (!s) return undefined;
+        try {
+          return JSON.parse(s);
+        } catch {
+          return undefined;
+        }
+      };
+
+      const send = (eventName: string, id: string | undefined, data: unknown) => {
+        if (raw.destroyed) return;
+        raw.write(`event: ${eventName}\n`);
+        if (id) raw.write(`id: ${id}\n`);
+        raw.write(`data: ${JSON.stringify(data)}\n\n`);
+      };
+
+      // Initial comment so browsers treat the stream as open quickly.
+      raw.write(`: connected\n\n`);
+
+      const unsubscribe = svc.subscribe((ev) => {
+        const payload = {
+          ...ev,
+          meta: safeJsonParse(ev.metaJson)
+        };
+        send("activity", ev.id, payload);
+      });
+
+      const heartbeat = setInterval(() => {
+        if (raw.destroyed) return;
+        raw.write(`: ping\n\n`);
+      }, 15_000);
+
+      raw.on("close", () => {
+        clearInterval(heartbeat);
+        unsubscribe();
+      });
+    }
+  );
+
+  app.get(
+    "/v1/admin/webhooks",
+    {
+      schema: {
+        summary: "List webhooks",
+        tags: ["admin"],
+        response: { 200: { type: "array", items: { type: "object", additionalProperties: true } } }
+      }
+    },
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const svc = opts.deps.webhookService;
+      if (!svc) return [];
+      return svc.list();
+    }
+  );
+
+  app.post(
+    "/v1/admin/webhooks",
+    {
+      bodyLimit: BODY_LIMITS.jsonSmall,
+      schema: {
+        summary: "Create webhook",
+        tags: ["admin"],
+        body: {
+          type: "object",
+          required: ["name", "url", "eventTypes"],
+          properties: {
+            name: { type: "string" },
+            url: { type: "string" },
+            enabled: { type: "boolean" },
+            eventTypes: { type: "array", items: { type: "string" } }
+          }
+        },
+        response: { 201: { type: "object", additionalProperties: true } }
+      }
+    },
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const svc = opts.deps.webhookService;
+      if (!svc) {
+        reply.code(503);
+        return { message: "Webhook service not available" };
+      }
+      const body = request.body as { name?: string; url?: string; enabled?: boolean; eventTypes?: unknown } | undefined;
+      const name = String(body?.name ?? "").trim();
+      const url = String(body?.url ?? "").trim();
+      const enabled = body?.enabled !== false;
+      const eventTypesRaw = body?.eventTypes;
+      const eventTypes = Array.isArray(eventTypesRaw) ? eventTypesRaw.filter((x) => typeof x === "string") : [];
+
+      if (!name) {
+        reply.code(400);
+        return { message: "name is required" };
+      }
+      try {
+        // eslint-disable-next-line no-new
+        new URL(url);
+      } catch {
+        reply.code(400);
+        return { message: "url must be a valid URL" };
+      }
+      if (!eventTypes.length) {
+        reply.code(400);
+        return { message: "eventTypes must be a non-empty array of strings" };
+      }
+
+      const created = await svc.create({ name, url, enabled, eventTypes });
+      reply.code(201);
+      return created;
+    }
+  );
+
+  app.patch(
+    "/v1/admin/webhooks/:id",
+    {
+      bodyLimit: BODY_LIMITS.jsonSmall,
+      schema: {
+        summary: "Update webhook",
+        tags: ["admin"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+        body: {
+          type: "object",
+          properties: {
+            name: { type: "string" },
+            url: { type: "string" },
+            enabled: { type: "boolean" },
+            eventTypes: { type: "array", items: { type: "string" } }
+          }
+        },
+        response: { 200: { type: "object", additionalProperties: true }, 404: { type: "object" } }
+      }
+    },
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const svc = opts.deps.webhookService;
+      if (!svc) {
+        reply.code(503);
+        return { message: "Webhook service not available" };
+      }
+      const { id } = request.params as { id: string };
+      const body = request.body as { name?: string; url?: string; enabled?: boolean; eventTypes?: unknown } | undefined;
+      const patch: any = {};
+      if (body?.name !== undefined) {
+        const name = String(body.name).trim();
+        if (!name) {
+          reply.code(400);
+          return { message: "name cannot be empty" };
+        }
+        patch.name = name;
+      }
+      if (body?.url !== undefined) {
+        const url = String(body.url).trim();
+        try {
+          // eslint-disable-next-line no-new
+          new URL(url);
+        } catch {
+          reply.code(400);
+          return { message: "url must be a valid URL" };
+        }
+        patch.url = url;
+      }
+      if (body?.enabled !== undefined) patch.enabled = Boolean(body.enabled);
+      if (body?.eventTypes !== undefined) {
+        const eventTypesRaw = body.eventTypes;
+        const eventTypes = Array.isArray(eventTypesRaw) ? eventTypesRaw.filter((x) => typeof x === "string") : [];
+        if (!eventTypes.length) {
+          reply.code(400);
+          return { message: "eventTypes must be a non-empty array of strings" };
+        }
+        patch.eventTypes = eventTypes;
+      }
+      const updated = await svc.update(id, patch);
+      if (!updated) {
+        reply.code(404);
+        return { message: "Not found" };
+      }
+      return updated;
+    }
+  );
+
+  app.delete(
+    "/v1/admin/webhooks/:id",
+    {
+      schema: {
+        summary: "Delete webhook",
+        tags: ["admin"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+        response: { 204: { type: "null" }, 404: { type: "object" } }
+      }
+    },
+    async (request, reply) => {
+      if (!requireSession(request, reply)) return;
+      const svc = opts.deps.webhookService;
+      if (!svc) {
+        reply.code(503);
+        return { message: "Webhook service not available" };
+      }
+      const { id } = request.params as { id: string };
+      const ok = await svc.delete(id);
+      if (!ok) {
+        reply.code(404);
+        return { message: "Not found" };
+      }
+      reply.code(204);
+      return;
+    }
+  );
+
   app.post(
     "/v1/admin/api-keys",
     {
@@ -244,6 +523,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         return { message: "name is required" };
       }
       const created = await opts.deps.apiKeyService!.create({ name, expiresAt: body?.expiresAt ?? null });
+      await opts.deps.activityService
+        ?.logEvent({
+          type: "apikey.created",
+          entityType: "apiKey",
+          entityId: created.record.id,
+          message: "API key created",
+          meta: { name: created.record.name }
+        })
+        .catch(() => undefined);
       reply.code(201);
       return { ...created.record, apiKey: created.apiKey };
     }
@@ -281,6 +569,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         reply.code(404);
         return { message: "Not found" };
       }
+      await opts.deps.activityService
+        ?.logEvent({
+          type: "apikey.revoked",
+          entityType: "apiKey",
+          entityId: updated.id,
+          message: "API key revoked",
+          meta: { name: updated.name }
+        })
+        .catch(() => undefined);
       return updated;
     }
   );

@@ -26,6 +26,7 @@ export function createDb(input: { dialect: DbDialect; sqlitePath: string; databa
       settings: sqliteSchema.settings,
       activityEvents: sqliteSchema.activityEvents,
       apiKeys: sqliteSchema.apiKeys,
+      webhooks: sqliteSchema.webhooks,
       close: async () => {
         sqlite.close();
       }
@@ -43,6 +44,7 @@ export function createDb(input: { dialect: DbDialect; sqlitePath: string; databa
     settings: pgSchema.settings,
     activityEvents: pgSchema.activityEvents,
     apiKeys: pgSchema.apiKeys,
+    webhooks: pgSchema.webhooks,
     close: async () => {
       await pool.end();
     }

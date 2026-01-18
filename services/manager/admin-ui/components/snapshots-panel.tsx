@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Search, RefreshCw, MoreVertical, Play, Camera, Server, Layers, HardDrive } from "lucide-react"
-import { apiGetJson, getStoredApiKey } from "@/lib/api"
+import { apiGetJson } from "@/lib/api"
 
 interface Snapshot {
   id: string
@@ -32,8 +32,6 @@ export function SnapshotsPanel() {
   const [searchQuery, setSearchQuery] = useState("")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const apiKey = getStoredApiKey()
-
   const filteredSnapshots = useMemo(
     () =>
       snapshots.filter(
@@ -51,7 +49,7 @@ export function SnapshotsPanel() {
     setLoading(true)
     setError(null)
     try {
-      const data = await apiGetJson<ApiSnapshot[]>("/v1/snapshots", apiKey)
+      const data = await apiGetJson<ApiSnapshot[]>("/v1/snapshots")
       setSnapshots(
         data.map((s) => ({
           id: s.id,
@@ -71,7 +69,7 @@ export function SnapshotsPanel() {
 
   useEffect(() => {
     refresh()
-  }, [apiKey])
+  }, [])
 
   return (
     <div className="p-6 space-y-6">

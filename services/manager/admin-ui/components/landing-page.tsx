@@ -139,6 +139,9 @@ rundatsheesh serve --port 8080`,
               <Link href="#api" className="text-muted-foreground hover:text-foreground transition-colors">
                 API
               </Link>
+              <Link href="/docs/" className="text-muted-foreground hover:text-foreground transition-colors">
+                Docs
+              </Link>
               <Link
                 href="https://github.com/rundatsheesh/rundatsheesh"
                 className="text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
@@ -373,7 +376,7 @@ rundatsheesh serve --port 8080`,
           <div className="mt-8 text-center">
             <p className="text-muted-foreground text-sm">
               Requires Linux with KVM enabled. See{" "}
-              <Link href="https://docs.rundatsheesh.dev/requirements" className="text-primary hover:underline">
+              <Link href="/docs/requirements" className="text-primary hover:underline">
                 system requirements
               </Link>{" "}
               for details.
@@ -527,7 +530,7 @@ rundatsheesh serve --port 8080`,
               </div>
             </div>
             <div className="text-center mt-8">
-              <Link href="https://docs.rundatsheesh.dev/api">
+              <Link href="/swagger">
                 <Button variant="outline" className="gap-2 bg-transparent">
                   <FileJson className="w-4 h-4" /> View Full API Reference
                 </Button>
@@ -549,7 +552,7 @@ rundatsheesh serve --port 8080`,
                 <Github className="w-5 h-5" /> Get Started
               </Button>
             </Link>
-            <Link href="https://docs.rundatsheesh.dev">
+            <Link href="/docs/">
               <Button variant="outline" size="lg" className="gap-2 h-12 px-8 bg-transparent">
                 Read the Docs <ArrowRight className="w-4 h-4" />
               </Button>
@@ -577,7 +580,7 @@ rundatsheesh serve --port 8080`,
               >
                 GitHub
               </Link>
-              <Link href="https://docs.rundatsheesh.dev" className="hover:text-foreground transition-colors">
+              <Link href="/docs/" className="hover:text-foreground transition-colors">
                 Documentation
               </Link>
               <Link

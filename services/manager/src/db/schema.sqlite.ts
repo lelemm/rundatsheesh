@@ -55,3 +55,13 @@ export const apiKeys = sqliteTable("api_keys", {
   lastUsedAt: text("last_used_at")
 });
 
+export const webhooks = sqliteTable("webhooks", {
+  id: text("id").primaryKey(),
+  name: text("name").notNull(),
+  url: text("url").notNull(),
+  enabled: integer("enabled", { mode: "boolean" }).notNull(),
+  // JSON string array (e.g. '["vm.started","image.kernel_uploaded"]')
+  eventTypesJson: text("event_types_json").notNull(),
+  createdAt: text("created_at").notNull()
+});
+

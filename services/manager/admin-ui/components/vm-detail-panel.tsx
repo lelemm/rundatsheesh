@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { apiRequestJson, getStoredApiKey } from "@/lib/api"
+import { apiRequestJson } from "@/lib/api"
 import {
   X,
   Terminal,
@@ -86,8 +86,6 @@ export function VMDetailPanel({ vm, onClose }: VMDetailPanelProps) {
   const [downloadPath, setDownloadPath] = useState("")
   const [isExecuting, setIsExecuting] = useState(false)
 
-  const apiKey = getStoredApiKey()
-
   const handleExecuteCommand = async () => {
     const trimmed = command.trim()
     if (!trimmed || isExecuting) return
@@ -97,7 +95,7 @@ export function VMDetailPanel({ vm, onClose }: VMDetailPanelProps) {
     setCommandOutput((prev) => [...prev, `$ ${trimmed}`])
 
     try {
-      const result = await apiRequestJson<ExecResult>("POST", `/v1/vms/${encodeURIComponent(vm.id)}/exec`, apiKey, {
+      const result = await apiRequestJson<ExecResult>("POST", `/v1/vms/${encodeURIComponent(vm.id)}/exec`, {
         cmd: trimmed,
       })
       setCommandOutput((prev) => [...prev, ...formatExecResult(result), ""])

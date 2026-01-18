@@ -4,9 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Server, Camera, Layers, Activity, Cpu, HardDrive } from "lucide-react"
 import type { View } from "./admin-shell"
 import { useEffect, useMemo, useState } from "react"
-import { apiGetJson, getStoredApiKey, setStoredApiKey } from "@/lib/api"
-import { Input } from "@/components/ui/input"
-import { Button } from "@/components/ui/button"
+import { apiGetJson } from "@/lib/api"
 
 interface DashboardProps {
   onNavigate: (view: View) => void
@@ -57,17 +55,9 @@ function timeAgo(iso: string): string {
 }
 
 export function Dashboard({ onNavigate }: DashboardProps) {
-  const [apiKey, setApiKey] = useState<string>("")
-  const [storedApiKey, setStoredKey] = useState<string | null>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [activity, setActivity] = useState<ActivityEvent[]>([])
   const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    const k = getStoredApiKey()
-    setStoredKey(k)
-    setApiKey(k ?? "")
-  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -75,8 +65,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       try {
         setError(null)
         const [o, a] = await Promise.all([
-          apiGetJson<Overview>("/v1/admin/overview", storedApiKey),
-          apiGetJson<ActivityEvent[]>(`/v1/admin/activity?limit=5`, storedApiKey),
+          apiGetJson<Overview>("/v1/admin/overview"),
+          apiGetJson<ActivityEvent[]>(`/v1/admin/activity?limit=5`),
         ])
         if (cancelled) return
         setOverview(o)
@@ -92,7 +82,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       cancelled = true
       clearInterval(timer)
     }
-  }, [storedApiKey])
+  }, [])
 
   const stats = useMemo(() => {
     const activeVms = overview?.counts.activeVms ?? null
@@ -137,32 +127,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         <h2 className="text-2xl font-semibold text-foreground">Dashboard</h2>
         <p className="text-muted-foreground text-sm mt-1">Overview of your microVM infrastructure</p>
       </div>
-
-      {!storedApiKey && !overview && (
-        <Card className="bg-card border-border">
-          <CardHeader>
-            <CardTitle className="text-foreground">API Key required</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-sm text-muted-foreground">
-              Enter your manager API key to load dashboard data. This is stored locally in your browser.
-            </p>
-            <div className="flex gap-2">
-              <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="X-API-Key" />
-              <Button
-                onClick={() => {
-                  const k = apiKey.trim()
-                  if (!k) return
-                  setStoredApiKey(k)
-                  setStoredKey(k)
-                }}
-              >
-                Save
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {error && (
         <Card className="bg-card border-border">

@@ -1,9 +1,21 @@
 # syntax=docker/dockerfile:1
+FROM node:20-bookworm AS docs-builder
+
+WORKDIR /docs
+COPY website/package.json website/package-lock.json ./
+RUN npm ci
+COPY website/docs ./docs
+COPY website/src ./src
+COPY website/static ./static
+COPY website/docusaurus.config.ts website/sidebars.ts website/tsconfig.json ./
+RUN npm run build
+
 FROM node:20-bookworm AS ui-builder
 
 WORKDIR /ui
 COPY services/manager/admin-ui/package.json services/manager/admin-ui/package-lock.json ./
-RUN npm ci
+# Work around sporadic V8/Turbofan crashes during dependency installation in some environments.
+RUN NODE_OPTIONS=--jitless npm ci
 COPY services/manager/admin-ui/app ./app
 COPY services/manager/admin-ui/components ./components
 COPY services/manager/admin-ui/hooks ./hooks
@@ -31,6 +43,7 @@ COPY services/manager/drizzle.sqlite.config.ts services/manager/drizzle.pg.confi
 RUN NODE_OPTIONS=--jitless npm run build
 RUN npm prune --omit=dev
 COPY --from=ui-builder /ui/out ./public/admin
+COPY --from=docs-builder /docs/build ./public/admin/docs
 
 FROM node:20-bookworm AS runtime
 

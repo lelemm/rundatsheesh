@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -25,7 +25,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import { apiGetJson, apiRequestJson, apiUploadBinary, getStoredApiKey } from "@/lib/api"
+import { apiGetJson, apiRequestJson, apiUploadBinary, apiUploadBinaryWithProgress } from "@/lib/api"
 import { Plus, RefreshCw, Star, Trash2, Upload } from "lucide-react"
 
 type GuestImage = {
@@ -49,21 +49,62 @@ function formatBytes(bytes: number | null | undefined): string {
   return `${mb.toFixed(0)} MB`
 }
 
+function FilePickButton(props: {
+  disabled?: boolean
+  buttonText: string
+  accept?: string
+  onFile: (file: File) => void
+  selectedName?: string | null
+}) {
+  const ref = useRef<HTMLInputElement | null>(null)
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        ref={ref}
+        type="file"
+        accept={props.accept ?? "*/*"}
+        className="hidden"
+        disabled={props.disabled}
+        onChange={(e) => {
+          const f = e.target.files?.[0]
+          if (f) props.onFile(f)
+          e.currentTarget.value = ""
+        }}
+      />
+      <Button
+        type="button"
+        variant="outline"
+        className="border-border text-foreground hover:bg-secondary bg-transparent"
+        disabled={props.disabled}
+        onClick={() => ref.current?.click()}
+      >
+        <Upload className="w-4 h-4 mr-2" />
+        {props.buttonText}
+      </Button>
+      <span className="text-xs text-muted-foreground truncate">{props.selectedName ?? ""}</span>
+    </div>
+  )
+}
+
 export function ImagesPanel() {
-  const apiKey = getStoredApiKey()
   const [items, setItems] = useState<GuestImage[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [newName, setNewName] = useState("")
   const [newDescription, setNewDescription] = useState("")
+  const [newKernelFile, setNewKernelFile] = useState<File | null>(null)
+  const [newRootfsFile, setNewRootfsFile] = useState<File | null>(null)
+  const [createKernelPct, setCreateKernelPct] = useState<number | null>(null)
+  const [createRootfsPct, setCreateRootfsPct] = useState<number | null>(null)
+  const [uploadPctByKey, setUploadPctByKey] = useState<Record<string, number | null>>({})
   const [deleteTarget, setDeleteTarget] = useState<GuestImage | null>(null)
 
   const refresh = async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await apiGetJson<GuestImage[]>("/v1/images", apiKey)
+      const data = await apiGetJson<GuestImage[]>("/v1/images")
       setItems(data)
     } catch (e: any) {
       setError(String(e?.message ?? e))
@@ -85,20 +126,55 @@ export function ImagesPanel() {
     if (!name || !description) return
     setError(null)
     try {
-      await apiRequestJson<GuestImage>("POST", "/v1/images", apiKey, { name, description })
+      const created = await apiRequestJson<GuestImage>("POST", "/v1/images", { name, description })
+      if (newKernelFile) {
+        setCreateKernelPct(0)
+        await apiUploadBinaryWithProgress({
+          method: "PUT",
+          path: `/v1/images/${encodeURIComponent(created.id)}/kernel`,
+          data: newKernelFile,
+          contentType: "application/octet-stream",
+          onProgress: (p) => setCreateKernelPct(p.pct),
+        })
+      }
+      if (newRootfsFile) {
+        setCreateRootfsPct(0)
+        await apiUploadBinaryWithProgress({
+          method: "PUT",
+          path: `/v1/images/${encodeURIComponent(created.id)}/rootfs`,
+          data: newRootfsFile,
+          contentType: "application/octet-stream",
+          onProgress: (p) => setCreateRootfsPct(p.pct),
+        })
+      }
       setCreateOpen(false)
       setNewName("")
       setNewDescription("")
+      setNewKernelFile(null)
+      setNewRootfsFile(null)
+      setCreateKernelPct(null)
+      setCreateRootfsPct(null)
       await refresh()
     } catch (e: any) {
       setError(String(e?.message ?? e))
+      setCreateKernelPct(null)
+      setCreateRootfsPct(null)
     }
   }
 
   const uploadFile = async (img: GuestImage, kind: "kernel" | "rootfs", file: File) => {
     setError(null)
     try {
-      await apiUploadBinary("PUT", `/v1/images/${encodeURIComponent(img.id)}/${kind}`, apiKey, file, "application/octet-stream")
+      const key = `${img.id}:${kind}`
+      setUploadPctByKey((m) => ({ ...m, [key]: 0 }))
+      await apiUploadBinaryWithProgress({
+        method: "PUT",
+        path: `/v1/images/${encodeURIComponent(img.id)}/${kind}`,
+        data: file,
+        contentType: "application/octet-stream",
+        onProgress: (p) => setUploadPctByKey((m) => ({ ...m, [key]: p.pct })),
+      })
+      setUploadPctByKey((m) => ({ ...m, [key]: null }))
       await refresh()
     } catch (e: any) {
       setError(String(e?.message ?? e))
@@ -108,7 +184,7 @@ export function ImagesPanel() {
   const setDefault = async (img: GuestImage) => {
     setError(null)
     try {
-      await apiRequestJson("POST", `/v1/images/${encodeURIComponent(img.id)}/set-default`, apiKey)
+      await apiRequestJson("POST", `/v1/images/${encodeURIComponent(img.id)}/set-default`)
       await refresh()
     } catch (e: any) {
       setError(String(e?.message ?? e))
@@ -118,7 +194,7 @@ export function ImagesPanel() {
   const deleteImage = async (img: GuestImage) => {
     setError(null)
     try {
-      await apiRequestJson("DELETE", `/v1/images/${encodeURIComponent(img.id)}`, apiKey)
+      await apiRequestJson("DELETE", `/v1/images/${encodeURIComponent(img.id)}`)
       setDeleteTarget(null)
       await refresh()
     } catch (e: any) {
@@ -177,7 +253,7 @@ export function ImagesPanel() {
               <DialogHeader>
                 <DialogTitle className="text-foreground">Create image</DialogTitle>
                 <DialogDescription className="text-muted-foreground">
-                  Create the metadata record, then upload kernel and rootfs.
+                  Create the metadata record. You can optionally upload kernel and rootfs right away.
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
@@ -205,6 +281,40 @@ export function ImagesPanel() {
                     placeholder="What this image is for"
                   />
                 </div>
+                <div className="space-y-2">
+                  <Label className="text-foreground">Kernel (vmlinux)</Label>
+                  <FilePickButton
+                    disabled={false}
+                    buttonText="Choose kernel file"
+                    onFile={setNewKernelFile}
+                    selectedName={newKernelFile?.name ?? null}
+                  />
+                  {createKernelPct !== null && (
+                    <div className="w-full">
+                      <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                        <div className="h-full bg-primary rounded-full" style={{ width: `${createKernelPct ?? 0}%` }} />
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">Uploading kernel… {Math.round(createKernelPct ?? 0)}%</div>
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-foreground">Rootfs (rootfs.ext4)</Label>
+                  <FilePickButton
+                    disabled={false}
+                    buttonText="Choose rootfs file"
+                    onFile={setNewRootfsFile}
+                    selectedName={newRootfsFile?.name ?? null}
+                  />
+                  {createRootfsPct !== null && (
+                    <div className="w-full">
+                      <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                        <div className="h-full bg-primary rounded-full" style={{ width: `${createRootfsPct ?? 0}%` }} />
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-1">Uploading rootfs… {Math.round(createRootfsPct ?? 0)}%</div>
+                    </div>
+                  )}
+                </div>
               </div>
               <DialogFooter>
                 <Button
@@ -215,26 +325,13 @@ export function ImagesPanel() {
                   Cancel
                 </Button>
                 <Button onClick={handleCreate} className="bg-primary text-primary-foreground hover:bg-primary/90">
-                  Create
+                  Create{newKernelFile || newRootfsFile ? " & upload" : ""}
                 </Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
         </div>
       </div>
-
-      {!apiKey && (
-        <Card className="bg-card border-border">
-          <CardHeader>
-            <CardTitle className="text-foreground">API key required</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">
-              Set an API key on the Dashboard page first (stored locally in your browser).
-            </p>
-          </CardContent>
-        </Card>
-      )}
 
       {error && (
         <Card className="bg-card border-border">
@@ -265,7 +362,7 @@ export function ImagesPanel() {
                 <Button
                   variant="outline"
                   className="border-border text-foreground hover:bg-secondary bg-transparent"
-                  disabled={!apiKey || img.id === defaultId}
+                  disabled={img.id === defaultId}
                   onClick={() => setDefault(img)}
                   title="Set as default"
                 >
@@ -276,7 +373,7 @@ export function ImagesPanel() {
                   variant="ghost"
                   size="icon"
                   className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                  disabled={!apiKey}
+                  disabled={false}
                   onClick={() => setDeleteTarget(img)}
                   title="Delete"
                 >
@@ -287,41 +384,49 @@ export function ImagesPanel() {
             <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-foreground">Kernel (vmlinux)</Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="file"
-                    accept="*/*"
-                    disabled={!apiKey}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0]
-                      if (f) uploadFile(img, "kernel", f)
-                      e.currentTarget.value = ""
-                    }}
-                    className="bg-input border-border text-foreground"
+                <div className="flex items-center gap-2 justify-between">
+                  <FilePickButton
+                    disabled={uploadPctByKey[`${img.id}:kernel`] !== undefined && uploadPctByKey[`${img.id}:kernel`] !== null}
+                    buttonText={img.hasKernel ? "Replace kernel" : "Upload kernel"}
+                    onFile={(f) => uploadFile(img, "kernel", f)}
                   />
                   <Badge variant="outline" className={img.hasKernel ? "text-success" : "text-muted-foreground"}>
                     {img.hasKernel ? "Uploaded" : "Missing"}
                   </Badge>
                 </div>
+                {uploadPctByKey[`${img.id}:kernel`] !== undefined && uploadPctByKey[`${img.id}:kernel`] !== null && (
+                  <div className="w-full">
+                    <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                      <div className="h-full bg-primary rounded-full" style={{ width: `${uploadPctByKey[`${img.id}:kernel`] ?? 0}%` }} />
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Uploading… {Math.round(uploadPctByKey[`${img.id}:kernel`] ?? 0)}%
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="space-y-2">
                 <Label className="text-foreground">Rootfs (rootfs.ext4)</Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    type="file"
-                    accept="*/*"
-                    disabled={!apiKey}
-                    onChange={(e) => {
-                      const f = e.target.files?.[0]
-                      if (f) uploadFile(img, "rootfs", f)
-                      e.currentTarget.value = ""
-                    }}
-                    className="bg-input border-border text-foreground"
+                <div className="flex items-center gap-2 justify-between">
+                  <FilePickButton
+                    disabled={uploadPctByKey[`${img.id}:rootfs`] !== undefined && uploadPctByKey[`${img.id}:rootfs`] !== null}
+                    buttonText={img.hasRootfs ? "Replace rootfs" : "Upload rootfs"}
+                    onFile={(f) => uploadFile(img, "rootfs", f)}
                   />
                   <Badge variant="outline" className={img.hasRootfs ? "text-success" : "text-muted-foreground"}>
                     {img.hasRootfs ? "Uploaded" : "Missing"}
                   </Badge>
                 </div>
+                {uploadPctByKey[`${img.id}:rootfs`] !== undefined && uploadPctByKey[`${img.id}:rootfs`] !== null && (
+                  <div className="w-full">
+                    <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                      <div className="h-full bg-primary rounded-full" style={{ width: `${uploadPctByKey[`${img.id}:rootfs`] ?? 0}%` }} />
+                    </div>
+                    <div className="text-xs text-muted-foreground mt-1">
+                      Uploading… {Math.round(uploadPctByKey[`${img.id}:rootfs`] ?? 0)}%
+                    </div>
+                  </div>
+                )}
               </div>
               {loading && (
                 <div className="col-span-full flex items-center gap-2 text-sm text-muted-foreground">

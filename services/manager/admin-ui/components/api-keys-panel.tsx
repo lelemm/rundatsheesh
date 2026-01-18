@@ -25,7 +25,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Copy, Plus, RefreshCw, Trash2 } from "lucide-react"
-import { apiGetJson, apiRequestJson, getStoredApiKey } from "@/lib/api"
+import { apiGetJson, apiRequestJson } from "@/lib/api"
 
 interface ApiKeyRecord {
   id: string
@@ -47,13 +47,12 @@ export function ApiKeysPanel() {
   const [newExpiresAt, setNewExpiresAt] = useState("")
   const [justCreatedKey, setJustCreatedKey] = useState<ApiKeyRecord | null>(null)
   const [revokeTarget, setRevokeTarget] = useState<ApiKeyRecord | null>(null)
-  const apiKey = getStoredApiKey()
 
   const refresh = async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await apiGetJson<ApiKeyRecord[]>("/v1/admin/api-keys", apiKey)
+      const data = await apiGetJson<ApiKeyRecord[]>("/v1/admin/api-keys")
       setKeys(data)
     } catch (e: any) {
       setError(String(e?.message ?? e))
@@ -64,14 +63,14 @@ export function ApiKeysPanel() {
 
   useEffect(() => {
     refresh()
-  }, [apiKey])
+  }, [])
 
   const handleCreate = async () => {
     const payload = {
       name: newName.trim(),
       expiresAt: newExpiresAt ? new Date(newExpiresAt).toISOString() : null,
     }
-    const created = await apiRequestJson<ApiKeyRecord>("POST", "/v1/admin/api-keys", apiKey, payload)
+    const created = await apiRequestJson<ApiKeyRecord>("POST", "/v1/admin/api-keys", payload)
     setJustCreatedKey(created)
     setCreateOpen(false)
     setNewName("")
@@ -81,7 +80,7 @@ export function ApiKeysPanel() {
 
   const handleRevoke = async () => {
     if (!revokeTarget) return
-    await apiRequestJson<ApiKeyRecord>("POST", `/v1/admin/api-keys/${revokeTarget.id}/revoke`, apiKey)
+    await apiRequestJson<ApiKeyRecord>("POST", `/v1/admin/api-keys/${revokeTarget.id}/revoke`)
     setRevokeTarget(null)
     await refresh()
   }

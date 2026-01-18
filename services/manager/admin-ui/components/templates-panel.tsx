@@ -10,7 +10,7 @@ import {
   RefreshCw,
   Layers,
 } from "lucide-react"
-import { apiGetJson, getStoredApiKey } from "@/lib/api"
+import { apiGetJson } from "@/lib/api"
 
 interface Template {
   id: string
@@ -32,8 +32,6 @@ export function TemplatesPanel() {
   const [searchQuery, setSearchQuery] = useState("")
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const apiKey = getStoredApiKey()
-
   const filteredTemplates = useMemo(
     () => templates.filter((tpl) => tpl.id.toLowerCase().includes(searchQuery.toLowerCase())),
     [templates, searchQuery],
@@ -43,7 +41,7 @@ export function TemplatesPanel() {
     setLoading(true)
     setError(null)
     try {
-      const data = await apiGetJson<ApiSnapshot[]>("/v1/snapshots", apiKey)
+      const data = await apiGetJson<ApiSnapshot[]>("/v1/snapshots")
       setTemplates(
         data
           .filter((s) => s.kind === "template")
@@ -63,7 +61,7 @@ export function TemplatesPanel() {
 
   useEffect(() => {
     refresh()
-  }, [apiKey])
+  }, [])
 
   return (
     <div className="p-6 space-y-6">

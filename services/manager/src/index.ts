@@ -15,6 +15,8 @@ import { ApiKeyService } from "./apiKey/apiKeyService.js";
 import fs from "node:fs/promises";
 import { computeSnapshotVersion } from "./snapshots/snapshotVersion.js";
 import { ImageService } from "./services/imageService.js";
+import { WebhookService } from "./services/webhookService.js";
+import { WebhookDispatcher } from "./services/webhookDispatcher.js";
 
 async function main() {
   const env = loadEnv();
@@ -28,6 +30,9 @@ async function main() {
   const store = new SqlVmStore(db.db as any, db.vms as any);
   const activityService = new ActivityService(db.db as any, db.activityEvents as any);
   const apiKeyService = new ApiKeyService(db.db as any, db.apiKeys as any);
+  const webhookService = new WebhookService(db.db as any, db.webhooks as any);
+  // Best-effort: subscribe to activity and deliver to configured webhooks (no retries/logs for now).
+  new WebhookDispatcher(activityService, webhookService);
   // After manager restart/recreate, Firecracker processes won't be running.
   // Normalize any transient states so `GET /v1/vms` doesn't claim they're still RUNNING.
   for (const vm of await store.list()) {
@@ -91,7 +96,8 @@ async function main() {
     images,
     vmService,
     activityService,
-    apiKeyService
+    apiKeyService,
+    webhookService
   };
 
   if (process.argv[2] === "snapshot-build") {
