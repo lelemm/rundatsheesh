@@ -81,38 +81,98 @@ await vm.upload('/app/data.json', jsonBuffer);
 
 // Clean up
 await vm.delete();`,
-    dockerInstall: `# Install via docker compose (recommended)
-cp env.example .env
+    dockerInstall: `# Install via Docker Compose (recommended)
 
-# Edit .env (required)
-# - API_KEY, ADMIN_EMAIL, ADMIN_PASSWORD
-# - RUN_DAT_SHEESH_DATA_DIR (optional, defaults to ./data)
+# 1) Create .env
+# - API_KEY: required for all /v1/* requests (send as X-API-Key header)
+# - ADMIN_EMAIL / ADMIN_PASSWORD: Admin UI login credentials
+# - RUN_DAT_SHEESH_DATA_DIR: host directory to persist manager state (DB, VM storage)
+# - RUN_DAT_SHEESH_IMAGES_DIR: host directory to store uploaded guest images (vmlinux + rootfs.ext4)
+# - ROOTFS_CLONE_MODE: "auto" is fine for most setups (advanced)
+# - ENABLE_SNAPSHOTS + SNAPSHOT_TEMPLATE_*: enable and size snapshot template VMs (optional)
+cat > .env <<'ENV'
+API_KEY=dev-key
+ADMIN_EMAIL=admin@example.com
+ADMIN_PASSWORD=admin
+RUN_DAT_SHEESH_DATA_DIR=./data
+RUN_DAT_SHEESH_IMAGES_DIR=./images
+ROOTFS_CLONE_MODE=auto
+ENABLE_SNAPSHOTS=false
+SNAPSHOT_TEMPLATE_CPU=1
+SNAPSHOT_TEMPLATE_MEM_MB=256
+ENV
 
+# 2) Create host directories
 mkdir -p ./data ./images
 
-# Start (dev mode on :3000)
-docker compose -f docker-compose.dev.yml up --build
+# 3) Create docker-compose.yml (published image)
+cat > docker-compose.yml <<'YAML'
+version: "3.9"
 
-# Build guest images locally (optional helper)
-make guest-images
+# Runs the manager API directly on http://127.0.0.1:3000 (no proxy/TLS).
+services:
+  manager:
+    image: lelemm/rundatsheesh:latest
 
-# Upload images in the Admin UI
-# 1) Open: http://localhost:3000/login/
-# 2) Go to: Images
-# 3) Create image + upload:
-#    - dist/images/debian/vmlinux + dist/images/debian/rootfs.ext4
-#    - dist/images/alpine/vmlinux + dist/images/alpine/rootfs.ext4
-# 4) Set a default image, then create VMs`,
-    binaryInstall: `# Download latest release
-curl -fsSL https://get.rundatsheesh.dev | sh
+    # Keep dev aligned with integration + prod compose hardening.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=unconfined
+      - apparmor=unconfined
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      # Required by Firecracker jailer (mount namespace + chroot + privilege drop + dev setup).
+      - SYS_ADMIN
+      - SYS_CHROOT
+      - SETUID
+      - SETGID
+      - MKNOD
+      - CHOWN
+      - DAC_OVERRIDE
+      - DAC_READ_SEARCH
+    tmpfs:
+      - /tmp
+      - /run
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv4.conf.all.forwarding: "1"
+      net.ipv4.conf.default.forwarding: "1"
 
-# Or manually
-wget https://github.com/rundatsheesh/rundatsheesh/releases/latest/download/rundatsheesh-linux-amd64.tar.gz
-tar -xzf rundatsheesh-linux-amd64.tar.gz
-sudo mv rundatsheesh /usr/local/bin/
+    environment:
+      API_KEY: \${API_KEY:-dev-key}
+      ADMIN_EMAIL: \${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: \${ADMIN_PASSWORD:-admin}
+      PORT: 3000
+      STORAGE_ROOT: /var/lib/run-dat-sheesh
+      IMAGES_DIR: /var/lib/run-dat-sheesh/images
+      AGENT_VSOCK_PORT: 8080
+      ROOTFS_CLONE_MODE: \${ROOTFS_CLONE_MODE:-auto}
+      ENABLE_SNAPSHOTS: \${ENABLE_SNAPSHOTS:-false}
+      SNAPSHOT_TEMPLATE_CPU: \${SNAPSHOT_TEMPLATE_CPU:-1}
+      SNAPSHOT_TEMPLATE_MEM_MB: \${SNAPSHOT_TEMPLATE_MEM_MB:-256}
+    ports:
+      - "3000:3000"
+    volumes:
+      - \${RUN_DAT_SHEESH_IMAGES_DIR:-./images}:/var/lib/run-dat-sheesh/images
+      - \${RUN_DAT_SHEESH_DATA_DIR:-./data}:/var/lib/run-dat-sheesh
+    devices:
+      - /dev/kvm:/dev/kvm
+      - /dev/vhost-vsock:/dev/vhost-vsock
+      - /dev/net/tun:/dev/net/tun
+      # Optional (some hosts expose this; integration script mounts it when present)
+      # - /dev/vsock:/dev/vsock
+YAML
 
-# Start the server
-rundatsheesh serve --port 8080`,
+# 4) Start
+docker compose up -d
+
+# 5) Open:
+# - Admin UI: http://localhost:3000/login/
+# - Docs: http://localhost:3000/docs/
+# - Swagger: http://localhost:3000/swagger`,
   }
 
   return (
@@ -143,7 +203,7 @@ rundatsheesh serve --port 8080`,
                 Docs
               </Link>
               <Link
-                href="https://github.com/rundatsheesh/rundatsheesh"
+                href="https://github.com/lelemm/rundatsheesh"
                 className="text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
               >
                 <Github className="w-4 h-4" /> GitHub
@@ -153,7 +213,7 @@ rundatsheesh serve --port 8080`,
               <Link href="/login">
                 <Button variant="ghost">Console</Button>
               </Link>
-              <Link href="https://github.com/rundatsheesh/rundatsheesh">
+              <Link href="https://github.com/lelemm/rundatsheesh">
                 <Button className="gap-2">
                   <Github className="w-4 h-4" /> Star on GitHub
                 </Button>
@@ -186,7 +246,7 @@ rundatsheesh serve --port 8080`,
               manage snapshots. Deploy on your own servers with full control.
             </p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-8">
-              <Link href="https://github.com/rundatsheesh/rundatsheesh">
+              <Link href="https://github.com/lelemm/rundatsheesh">
                 <Button size="lg" className="gap-2 h-12 px-6">
                   <Github className="w-4 h-4" /> View on GitHub
                 </Button>
@@ -323,12 +383,9 @@ rundatsheesh serve --port 8080`,
           </div>
 
           <Tabs defaultValue="docker" className="max-w-4xl mx-auto">
-            <TabsList className="grid w-full grid-cols-2 mb-6">
+            <TabsList className="grid w-full grid-cols-1 mb-6">
               <TabsTrigger value="docker" className="gap-2">
                 <Box className="w-4 h-4" /> Docker
-              </TabsTrigger>
-              <TabsTrigger value="binary" className="gap-2">
-                <Terminal className="w-4 h-4" /> Binary
               </TabsTrigger>
             </TabsList>
 
@@ -348,26 +405,6 @@ rundatsheesh serve --port 8080`,
                 </div>
                 <pre className="p-4 font-mono text-sm overflow-x-auto text-muted-foreground">
                   <code>{codeExamples.dockerInstall}</code>
-                </pre>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="binary">
-              <div className="rounded-xl border border-border bg-card overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
-                  <span className="text-sm font-medium">Binary Installation</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => copyCode(codeExamples.binaryInstall, "binary")}
-                  >
-                    <Copy className={`w-3 h-3 mr-1 ${copied === "binary" ? "text-success" : ""}`} />
-                    {copied === "binary" ? "Copied!" : "Copy"}
-                  </Button>
-                </div>
-                <pre className="p-4 font-mono text-sm overflow-x-auto text-muted-foreground">
-                  <code>{codeExamples.binaryInstall}</code>
                 </pre>
               </div>
             </TabsContent>
@@ -547,7 +584,7 @@ rundatsheesh serve --port 8080`,
             Open source, self-hosted, and fully under your control. Run untrusted code without trusting third parties.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link href="https://github.com/rundatsheesh/rundatsheesh">
+            <Link href="https://github.com/lelemm/rundatsheesh">
               <Button size="lg" className="gap-2 h-12 px-8">
                 <Github className="w-5 h-5" /> Get Started
               </Button>
@@ -575,7 +612,7 @@ rundatsheesh serve --port 8080`,
             </div>
             <div className="flex items-center gap-6 text-sm text-muted-foreground">
               <Link
-                href="https://github.com/rundatsheesh/rundatsheesh"
+                href="https://github.com/lelemm/rundatsheesh"
                 className="hover:text-foreground transition-colors"
               >
                 GitHub
@@ -584,7 +621,7 @@ rundatsheesh serve --port 8080`,
                 Documentation
               </Link>
               <Link
-                href="https://github.com/rundatsheesh/rundatsheesh/blob/main/LICENSE"
+                href="https://github.com/lelemm/rundatsheesh/blob/main/LICENSE"
                 className="hover:text-foreground transition-colors"
               >
                 Apache 2.0 License

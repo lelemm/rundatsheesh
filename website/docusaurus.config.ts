@@ -45,7 +45,7 @@ const config: Config = {
         docs: {
           routeBasePath: "/",
           sidebarPath: "./sidebars.ts",
-          editUrl: "https://github.com/rundatsheesh/rundatsheesh/tree/main/website/"
+          editUrl: "https://github.com/lelemm/rundatsheesh/tree/main/website/"
         },
         blog: false,
         theme: {
@@ -78,7 +78,7 @@ const config: Config = {
           position: "right"
         },
         {
-          href: "https://github.com/rundatsheesh/rundatsheesh",
+          href: "https://github.com/lelemm/rundatsheesh",
           label: "GitHub",
           position: "right"
         },
