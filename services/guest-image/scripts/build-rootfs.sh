@@ -155,3 +155,64 @@ mkdir -p "$ROOTFS_DIR/usr/local"
 tar -xf /tmp/node.tar.xz -C "$ROOTFS_DIR/usr/local" --strip-components=1
 rm -f /tmp/node.tar.xz
 
+# Stage Node + npm into the /exec sandbox (chroot root: /opt/sandbox).
+# Without this, /exec can't run npm install because it only sees the sandbox filesystem.
+cat >"$ROOTFS_DIR/tmp/stage-node-into-sandbox.sh" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+SANDBOX_ROOT=/opt/sandbox
+
+stage_file() {
+  local f="$1"
+  [ -e "$f" ] || return 0
+  mkdir -p "$SANDBOX_ROOT$(dirname "$f")"
+  cp -aL "$f" "$SANDBOX_ROOT$f"
+}
+
+stage_bin() {
+  local bin="$1"
+  [ -x "$bin" ] || { echo "missing executable: $bin" >&2; exit 1; }
+  mkdir -p "$SANDBOX_ROOT$(dirname "$bin")"
+  cp -a "$bin" "$SANDBOX_ROOT$bin"
+}
+
+stage_ldd() {
+  local target="$1"
+  local out=""
+  if ! out="$(ldd "$target" 2>/dev/null)"; then
+    return 0
+  fi
+  printf "%s\n" "$out" | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do
+    stage_file "$dep"
+  done
+}
+
+echo "Staging node/npm into sandbox chroot ($SANDBOX_ROOT)..."
+
+# Node binary + its dynamic deps
+stage_bin /usr/local/bin/node
+stage_ldd /usr/local/bin/node
+
+# npm/npx are scripts; copy them plus the bundled node_modules tree
+if [ -e /usr/local/bin/npm ]; then stage_file /usr/local/bin/npm; fi
+if [ -e /usr/local/bin/npx ]; then stage_file /usr/local/bin/npx; fi
+
+if [ -d /usr/local/lib/node_modules ]; then
+  mkdir -p "$SANDBOX_ROOT/usr/local/lib/node_modules"
+  cp -a /usr/local/lib/node_modules/. "$SANDBOX_ROOT/usr/local/lib/node_modules/"
+fi
+
+# Ensure /usr/bin/env exists for shebangs like `#!/usr/bin/env node`
+stage_file /usr/bin/env
+
+# ICU data: some Node builds load ICU datasets from /usr/share/icu at runtime.
+# When `/exec` chroots into ${SANDBOX_ROOT}, that path must exist inside the sandbox too.
+if [ -d /usr/share/icu ]; then
+  mkdir -p "$SANDBOX_ROOT/usr/share/icu"
+  cp -a /usr/share/icu/. "$SANDBOX_ROOT/usr/share/icu/"
+fi
+EOF
+chmod +x "$ROOTFS_DIR/tmp/stage-node-into-sandbox.sh"
+chroot "$ROOTFS_DIR" /bin/bash /tmp/stage-node-into-sandbox.sh
+rm -f "$ROOTFS_DIR/tmp/stage-node-into-sandbox.sh"

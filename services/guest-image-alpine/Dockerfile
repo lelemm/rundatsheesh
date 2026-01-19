@@ -137,6 +137,41 @@ RUN set -eux; \
     chown -R 1000:1000 /rootfs/opt/sandbox/usr /rootfs/opt/sandbox/etc 2>/dev/null || true; \
   fi
 
+# Stage node + npm into /opt/sandbox so `/exec` can run `npm install` (offline installs still need npm).
+RUN set -eux; \
+  if [ -x /rootfs/usr/bin/node ]; then \
+    mkdir -p /rootfs/opt/sandbox/usr/bin /rootfs/opt/sandbox/usr/lib /rootfs/opt/sandbox/usr/share; \
+    cp -a /rootfs/usr/bin/node /rootfs/opt/sandbox/usr/bin/node; \
+    if [ -e /rootfs/usr/bin/npm ]; then cp -a /rootfs/usr/bin/npm /rootfs/opt/sandbox/usr/bin/npm; fi; \
+    if [ -e /rootfs/usr/bin/npx ]; then cp -a /rootfs/usr/bin/npx /rootfs/opt/sandbox/usr/bin/npx; fi; \
+    if [ -d /rootfs/usr/lib/node_modules ]; then \
+      mkdir -p /rootfs/opt/sandbox/usr/lib/node_modules; \
+      cp -a /rootfs/usr/lib/node_modules/. /rootfs/opt/sandbox/usr/lib/node_modules/; \
+    fi; \
+    # Node's Intl APIs (used by npm) require ICU data, which Alpine provides under /usr/share/icu.
+    # When we chroot into /opt/sandbox, that path must exist inside the sandbox as well.
+    if [ -d /rootfs/usr/share/icu ]; then \
+      mkdir -p /rootfs/opt/sandbox/usr/share/icu; \
+      cp -a /rootfs/usr/share/icu/. /rootfs/opt/sandbox/usr/share/icu/; \
+    fi; \
+    stage_ldd_node() { \
+      target="$1"; \
+      chroot /rootfs /usr/bin/ldd "$target" 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do \
+        if [ -e "/rootfs$dep" ]; then \
+          mkdir -p "/rootfs/opt/sandbox$(dirname "$dep")"; \
+          cp -aL "/rootfs$dep" "/rootfs/opt/sandbox$dep"; \
+        fi; \
+      done; \
+    }; \
+    stage_ldd_node /usr/bin/node; \
+    # /usr/bin/env is used by npm's shebang on some distros.
+    if [ -e /rootfs/usr/bin/env ]; then \
+      mkdir -p /rootfs/opt/sandbox/usr/bin; \
+      cp -aL /rootfs/usr/bin/env /rootfs/opt/sandbox/usr/bin/env; \
+    fi; \
+    chown -R 1000:1000 /rootfs/opt/sandbox/usr 2>/dev/null || true; \
+  fi
+
 # Guest agent runtime (ESM + dependencies)
 COPY --from=guest-agent-builder /src/package.json /rootfs/opt/guest-agent/package.json
 COPY --from=guest-agent-builder /src/package-lock.json /rootfs/opt/guest-agent/package-lock.json

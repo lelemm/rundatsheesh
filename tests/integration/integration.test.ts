@@ -145,6 +145,7 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   let tmpDir = "";
   let uploadBuf: Uint8Array | null = null;
   let sdkUploadBuf: Uint8Array | null = null;
+  let npmPkgUploadBuf: Uint8Array | null = null;
 
   beforeAll(async () => {
     await waitForManager();
@@ -175,6 +176,19 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     const sdkTar = path.join(tmpDir, "sdk-upload.tar.gz");
     mustExec("tar", ["-czf", sdkTar, "-C", tmpDir, "sdk", "app"], { stdio: "inherit" });
     sdkUploadBuf = new Uint8Array(fs.readFileSync(sdkTar));
+
+    // Prepare a tiny local npm package to install offline (no internet dependency).
+    const npmPkgDir = path.join(tmpDir, "npm-pkg");
+    fs.mkdirSync(npmPkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmPkgDir, "package.json"),
+      JSON.stringify({ name: "rds-it-pkg", version: "1.0.0", main: "index.js" }, null, 2) + "\n",
+      "utf-8"
+    );
+    fs.writeFileSync(path.join(npmPkgDir, "index.js"), 'module.exports = () => "ok";\n', "utf-8");
+    const npmTar = path.join(tmpDir, "npm-pkg.tar.gz");
+    mustExec("tar", ["-czf", npmTar, "-C", tmpDir, "npm-pkg"], { stdio: "inherit" });
+    npmPkgUploadBuf = new Uint8Array(fs.readFileSync(npmTar));
   });
 
   afterAll(async () => {
@@ -248,6 +262,40 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     const res = await vmExec(vmOk, "git --version");
     expect(res.exitCode).toBe(0);
     expect(res.stdout.toLowerCase()).toContain("git version");
+  });
+
+  it("exec: npm install works (offline local package)", async () => {
+    // Upload a local package to /home/user so we can install from a path without hitting the network.
+    const { status, buf } = await apiBinary(
+      "POST",
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user")}`,
+      npmPkgUploadBuf ?? undefined
+    );
+    if (status !== 204) {
+      // eslint-disable-next-line no-console
+      console.error("[it] npm pkg upload failed", { status, body: buf.toString("utf-8", 0, 2048) });
+    }
+    expect(status).toBe(204);
+
+    // Use /workspace inside the chrooted exec sandbox.
+    const version = await vmExec(vmOk, "node --version && npm --version");
+    expect(version.exitCode).toBe(0);
+
+    const install = await vmExec(
+      vmOk,
+      [
+        "cd /workspace",
+        "rm -rf npm-test && mkdir -p npm-test && cd npm-test",
+        // Keep output visible so failures are diagnosable (Alpine npm has different behavior).
+        "npm init -y",
+        // Explicit file: install; disable noisy network features (audit/fund/update notifier).
+        "npm install --no-audit --no-fund --no-update-notifier --progress=false file:../npm-pkg",
+        "test -d node_modules/rds-it-pkg",
+        "node -e \"const pkg=require('rds-it-pkg'); process.stdout.write(String(pkg()));\"",
+      ].join(" && ")
+    );
+    expect(install.exitCode).toBe(0);
+    expect(install.stdout.trim()).toBe("ok");
   });
 
   it("files: upload succeeds to /home/user", async () => {

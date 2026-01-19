@@ -37,6 +37,36 @@ COPY services/guest-image/scripts/build-rootfs.sh /usr/local/bin/build-rootfs.sh
 RUN chmod +x /usr/local/bin/build-rootfs.sh \
   && DEBIAN_MIRROR="${DEBIAN_MIRROR}" DEBIAN_SUITE="${DEBIAN_SUITE}" NODE_VERSION="${NODE_VERSION}" /usr/local/bin/build-rootfs.sh /rootfs
 
+# Ensure Node + npm are available inside the /exec sandbox chroot (/opt/sandbox).
+# The guest-agent executes commands under `chroot /opt/sandbox ...`, so tools must exist there.
+RUN set -eux; \
+  if [ -x /rootfs/usr/local/bin/node ]; then \
+    mkdir -p /rootfs/opt/sandbox/usr/local/bin /rootfs/opt/sandbox/usr/local/lib /rootfs/opt/sandbox/usr/bin; \
+    cp -a /rootfs/usr/local/bin/node /rootfs/opt/sandbox/usr/local/bin/node; \
+    if [ -e /rootfs/usr/local/bin/npm ]; then cp -a /rootfs/usr/local/bin/npm /rootfs/opt/sandbox/usr/local/bin/npm; fi; \
+    if [ -e /rootfs/usr/local/bin/npx ]; then cp -a /rootfs/usr/local/bin/npx /rootfs/opt/sandbox/usr/local/bin/npx; fi; \
+    if [ -d /rootfs/usr/local/lib/node_modules ]; then \
+      mkdir -p /rootfs/opt/sandbox/usr/local/lib/node_modules; \
+      cp -a /rootfs/usr/local/lib/node_modules/. /rootfs/opt/sandbox/usr/local/lib/node_modules/; \
+    fi; \
+    # Provide stable /usr/bin entrypoints inside the sandbox.
+    ln -sfn /usr/local/bin/node /rootfs/opt/sandbox/usr/bin/node; \
+    if [ -e /rootfs/usr/local/bin/npm ]; then ln -sfn /usr/local/bin/npm /rootfs/opt/sandbox/usr/bin/npm; fi; \
+    if [ -e /rootfs/usr/local/bin/npx ]; then ln -sfn /usr/local/bin/npx /rootfs/opt/sandbox/usr/bin/npx; fi; \
+    # /usr/bin/env for shebangs like `#!/usr/bin/env node`
+    if [ -e /rootfs/usr/bin/env ]; then \
+      mkdir -p /rootfs/opt/sandbox/usr/bin; \
+      cp -aL /rootfs/usr/bin/env /rootfs/opt/sandbox/usr/bin/env; \
+    fi; \
+    # Copy node's dynamic loader/libs into the sandbox (follow symlinks).
+    for dep in $(chroot /rootfs /usr/bin/ldd /usr/local/bin/node 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }'); do \
+      if [ -e "/rootfs$dep" ]; then \
+        mkdir -p "/rootfs/opt/sandbox$(dirname "$dep")"; \
+        cp -aL "/rootfs$dep" "/rootfs/opt/sandbox$dep"; \
+      fi; \
+    done; \
+  fi
+
 # Guest agent runtime (ESM + dependencies)
 COPY --from=guest-agent-builder /src/package.json /rootfs/opt/guest-agent/package.json
 COPY --from=guest-agent-builder /src/package-lock.json /rootfs/opt/guest-agent/package-lock.json

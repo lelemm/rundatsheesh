@@ -48,11 +48,16 @@ async function ensureBindMount(source: string, target: string): Promise<void> {
  */
 export async function ensureExecSandboxReady(): Promise<void> {
   await ensureDir(SANDBOX_ROOT);
+  await ensureDir(`${SANDBOX_ROOT}/dev`);
   await ensureDir(`${SANDBOX_ROOT}/home/user`);
   await ensureDir(`${SANDBOX_ROOT}/workspace`);
 
   // Bind mounts make /home/user visible inside the chroot without symlink tricks.
   await ensureBindMount(USER_HOME, `${SANDBOX_ROOT}/home/user`);
   await ensureBindMount(USER_HOME, `${SANDBOX_ROOT}/workspace`);
+
+  // Provide a working /dev inside the chroot. Creating device nodes in the image build
+  // can fail depending on the filesystem/permissions; bind-mounting /dev is reliable.
+  await ensureBindMount("/dev", `${SANDBOX_ROOT}/dev`);
 }
 

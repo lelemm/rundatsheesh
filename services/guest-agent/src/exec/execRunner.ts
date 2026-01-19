@@ -139,12 +139,15 @@ function buildMinimalEnv(extra?: Record<string, string>) {
   return {
     // Prefer /usr/bin over /usr/sbin so we pick GNU/coreutils `chroot` on Alpine
     // (BusyBox `chroot` may not support flags like `--userspec`).
-    PATH: "/usr/bin:/usr/sbin:/bin:/sbin",
-    HOME: "/",
+    // Include /usr/local/bin so Node/npm (installed there on Debian images) is available in /exec.
+    PATH: "/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin",
+    // Keep HOME writable (bind-mounted from real /home/user) so tools like npm can create caches.
+    HOME: "/home/user",
     USER: "user",
     LOGNAME: "user",
     SHELL: "/bin/sh",
     LANG: "C.UTF-8",
+    TMPDIR: "/home/user/.tmp",
     ...extra
   };
 }
