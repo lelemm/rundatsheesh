@@ -273,6 +273,19 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     expect(res.stdout.trim()).toBe(value);
   });
 
+  it("run-ts: sandbox has resolv.conf (DNS config present)", async () => {
+    const res = await vmRunTs(
+      vmOk,
+      [
+        "const text = await Deno.readTextFile('/etc/resolv.conf');",
+        "console.log(text.trim());"
+      ].join("\n")
+    );
+    expect(res.exitCode).toBe(0);
+    // Default integration gateway is 172.16.0.1
+    expect(res.stdout).toContain("nameserver 172.16.0.1");
+  });
+
   it("exec: runs as uid 1000", async () => {
     const idu = await vmExec(vmOk, "id -u");
     expect(idu.stdout.trim()).toBe("1000");

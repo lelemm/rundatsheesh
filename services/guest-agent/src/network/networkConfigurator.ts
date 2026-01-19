@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
 import type { NetConfigRequest } from "../types/agent.js";
 import type { NetworkConfigurator } from "../types/interfaces.js";
+import { SANDBOX_ROOT } from "../config/constants.js";
 
 const IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const MAC = /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/;
@@ -35,6 +37,37 @@ export class IpNetworkConfigurator implements NetworkConfigurator {
     await runCmd("ip", ["addr", "add", `${ip}/${cidr}`, "dev", iface]);
     await runCmd("ip", ["route", "replace", "default", "via", gateway, "dev", iface]);
     await runCmd("ip", ["link", "set", "dev", iface, "up"]);
+
+    // Ensure DNS works for jailed /exec and /run-ts calls.
+    // The microVM is statically configured; use the gateway as a simple resolver (host provides it).
+    await ensureResolvConf(gateway);
+  }
+}
+
+async function ensureResolvConf(nameserverIp: string): Promise<void> {
+  const content = `nameserver ${nameserverIp}\noptions timeout:1 attempts:2\n`;
+  // Write for the normal rootfs. Some minimal images ship /etc/resolv.conf as a symlink to a non-existent target.
+  // To avoid silent DNS misconfig, force it to be a real file.
+  await fs.mkdir("/etc", { recursive: true }).catch(() => undefined);
+  await ensureRegularFile("/etc/resolv.conf");
+  await fs.writeFile("/etc/resolv.conf", content, { encoding: "utf-8", mode: 0o644 }).catch(() => undefined);
+
+  // Write for the sandbox chroot (used by /exec and /run-ts) as a fallback.
+  await fs.mkdir(`${SANDBOX_ROOT}/etc`, { recursive: true }).catch(() => undefined);
+  await ensureRegularFile(`${SANDBOX_ROOT}/etc/resolv.conf`);
+  await fs.writeFile(`${SANDBOX_ROOT}/etc/resolv.conf`, content, { encoding: "utf-8", mode: 0o644 }).catch(() => undefined);
+}
+
+async function ensureRegularFile(p: string): Promise<void> {
+  try {
+    const st = await fs.lstat(p);
+    if (st.isSymbolicLink() || !st.isFile()) {
+      await fs.rm(p, { force: true });
+      await fs.writeFile(p, "", { encoding: "utf-8", mode: 0o644 });
+    }
+  } catch {
+    // Doesn't exist; create it.
+    await fs.writeFile(p, "", { encoding: "utf-8", mode: 0o644 }).catch(() => undefined);
   }
 }
 

@@ -64,6 +64,65 @@ async function tryBindMountFileIntoSandbox(absoluteHostPath: string): Promise<vo
   }
 }
 
+function hexLeIpv4ToString(hexLe: string): string | null {
+  // /proc/net/route stores IPv4 addresses as 8 hex chars in little-endian.
+  if (!/^[0-9A-Fa-f]{8}$/.test(hexLe)) return null;
+  const bytes = [
+    parseInt(hexLe.slice(6, 8), 16),
+    parseInt(hexLe.slice(4, 6), 16),
+    parseInt(hexLe.slice(2, 4), 16),
+    parseInt(hexLe.slice(0, 2), 16)
+  ];
+  if (bytes.some((b) => Number.isNaN(b) || b < 0 || b > 255)) return null;
+  return bytes.join(".");
+}
+
+async function getDefaultGatewayIpv4(): Promise<string | null> {
+  try {
+    const text = await fs.readFile("/proc/net/route", "utf-8");
+    const lines = text.split("\n").filter(Boolean);
+    // Header: Iface Destination Gateway Flags RefCnt Use Metric Mask ...
+    for (const line of lines.slice(1)) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 3) continue;
+      const destination = parts[1];
+      const gatewayHex = parts[2];
+      if (destination !== "00000000") continue;
+      return hexLeIpv4ToString(gatewayHex);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function ensureRegularFile(p: string): Promise<void> {
+  try {
+    const st = await fs.lstat(p);
+    if (st.isSymbolicLink() || !st.isFile()) {
+      await fs.rm(p, { force: true });
+      await fs.writeFile(p, "", { encoding: "utf-8", mode: 0o644 });
+    }
+  } catch {
+    await fs.writeFile(p, "", { encoding: "utf-8", mode: 0o644 }).catch(() => undefined);
+  }
+}
+
+async function ensureResolvConfFromGateway(): Promise<void> {
+  const gw = await getDefaultGatewayIpv4();
+  if (!gw) return;
+  const content = `nameserver ${gw}\noptions timeout:1 attempts:2\n`;
+  await fs.mkdir("/etc", { recursive: true }).catch(() => undefined);
+  await ensureRegularFile("/etc/resolv.conf");
+  await fs.writeFile("/etc/resolv.conf", content, { encoding: "utf-8", mode: 0o644 }).catch(() => undefined);
+
+  await fs.mkdir(`${SANDBOX_ROOT}/etc`, { recursive: true }).catch(() => undefined);
+  await ensureRegularFile(`${SANDBOX_ROOT}/etc/resolv.conf`);
+  await fs
+    .writeFile(`${SANDBOX_ROOT}/etc/resolv.conf`, content, { encoding: "utf-8", mode: 0o644 })
+    .catch(() => undefined);
+}
+
 /**
  * Ensure the /exec sandbox is ready:
  * - chroot root at SANDBOX_ROOT exists and contains a minimal toolchain (provided by the image)
@@ -88,6 +147,10 @@ export async function ensureExecSandboxReady(): Promise<void> {
   // Some runtimes (notably Deno on Alpine/musl) rely on /proc for basic introspection
   // (e.g. /proc/self/exe). Bind-mount /proc so jailed commands can run reliably.
   await ensureBindMount("/proc", `${SANDBOX_ROOT}/proc`);
+
+  // Ensure a sane resolver config exists (and matches the VM's default route gateway).
+  // This is important because Deno's DNS lookups happen inside the chroot for /run-ts.
+  await ensureResolvConfFromGateway();
 
   // Ensure jailed processes can resolve DNS / do hostname lookups.
   // Without this, `/run-ts` inside the chroot can fail with DNS lookup errors.

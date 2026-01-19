@@ -23,7 +23,7 @@ export class ExecRunnerImpl implements ExecRunner {
     const args = [
       "run",
       "--quiet",
-      "--allow-read=/workspace",
+      "--allow-read=/workspace,/etc/resolv.conf,/etc/hosts,/etc/nsswitch.conf,/etc/ssl/certs/ca-certificates.crt",
       "--allow-write=/workspace"
     ];
     if (allowEnvNames.length) {
