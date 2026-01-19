@@ -13,6 +13,7 @@ export class IpNetworkConfigurator implements NetworkConfigurator {
     if (iface !== "eth0") {
       throw new Error("Only eth0 is supported");
     }
+    const dnsOnly = Boolean(payload.dnsOnly);
     const ip = String(payload.ip ?? "").trim();
     const gateway = String(payload.gateway ?? "").trim();
     const cidr = payload.cidr ?? 24;
@@ -28,19 +29,21 @@ export class IpNetworkConfigurator implements NetworkConfigurator {
       throw new Error("Invalid mac");
     }
 
-    // Keep this sequence conservative; if anything fails, the caller can retry.
-    await runCmd("ip", ["link", "set", "dev", iface, "down"]);
-    if (mac) {
-      await runCmd("ip", ["link", "set", "dev", iface, "address", mac]);
+    if (!dnsOnly) {
+      // Keep this sequence conservative; if anything fails, the caller can retry.
+      await runCmd("ip", ["link", "set", "dev", iface, "down"]);
+      if (mac) {
+        await runCmd("ip", ["link", "set", "dev", iface, "address", mac]);
+      }
+      await runCmd("ip", ["addr", "flush", "dev", iface]);
+      await runCmd("ip", ["addr", "add", `${ip}/${cidr}`, "dev", iface]);
+      await runCmd("ip", ["route", "replace", "default", "via", gateway, "dev", iface]);
+      await runCmd("ip", ["link", "set", "dev", iface, "up"]);
     }
-    await runCmd("ip", ["addr", "flush", "dev", iface]);
-    await runCmd("ip", ["addr", "add", `${ip}/${cidr}`, "dev", iface]);
-    await runCmd("ip", ["route", "replace", "default", "via", gateway, "dev", iface]);
-    await runCmd("ip", ["link", "set", "dev", iface, "up"]);
 
     // Ensure DNS works for jailed /exec and /run-ts calls.
     // The microVM is statically configured; use the gateway as a simple resolver (host provides it).
-    await ensureResolvConf(gateway);
+    await ensureResolvConf(payload.dns ? String(payload.dns).trim() : gateway);
   }
 }
 

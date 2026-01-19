@@ -81,6 +81,7 @@ async function main() {
     images,
     limits: env.limits,
     activity: activityService,
+    dnsServerIp: env.dnsServerIp,
     snapshots: env.enableSnapshots
       ? { enabled: true, version: snapshotVersion, templateCpu: env.snapshotTemplateCpu, templateMemMb: env.snapshotTemplateMemMb }
       : undefined

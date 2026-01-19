@@ -20,6 +20,9 @@ This page lists env vars used by the **manager** (host side) and **guest agent**
 ### Guest image selection
 - `KERNEL_PATH` (optional): “built-in” kernel image path inside the container.
 - `BASE_ROOTFS_PATH` (optional): “built-in” base rootfs path inside the container.
+- `DNS_SERVER_IP` (optional): override the DNS resolver (nameserver) configured inside microVMs.
+  - Default: unset (guest uses the VM gateway IP as DNS).
+  - Set this if your gateway does not provide DNS, e.g. `1.1.1.1` (and ensure your egress allowlist permits it).
 
 ### Database
 - `DB_DIALECT` (default `sqlite`): `sqlite` or `postgres`.

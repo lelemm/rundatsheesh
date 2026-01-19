@@ -34,4 +34,14 @@ export interface NetConfigRequest {
   cidr?: number;
   gateway: string;
   mac?: string;
+  /**
+   * Optional DNS resolver IPv4 address (nameserver) to write to /etc/resolv.conf.
+   * If omitted, the gateway is used.
+   */
+  dns?: string;
+  /**
+   * If true, only updates DNS config (resolv.conf) and skips IP/route changes.
+   * Useful when the guest networking is already configured via kernel cmdline.
+   */
+  dnsOnly?: boolean;
 }

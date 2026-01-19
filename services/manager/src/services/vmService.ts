@@ -17,6 +17,7 @@ export interface VmServiceOptions {
   activity?: ActivityService;
   snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   vsockCidStart?: number;
+  dnsServerIp?: string;
   limits?: {
     maxVms: number;
     maxCpu: number;
@@ -37,6 +38,7 @@ export class VmService {
   private readonly activity?: ActivityService;
   private readonly snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   private readonly limits: NonNullable<VmServiceOptions["limits"]>;
+  private readonly dnsServerIp?: string;
   private nextVsockCid: number;
 
   constructor(options: VmServiceOptions) {
@@ -48,6 +50,7 @@ export class VmService {
     this.images = options.images;
     this.activity = options.activity;
     this.snapshots = options.snapshots;
+    this.dnsServerIp = options.dnsServerIp;
     this.limits = options.limits ?? {
       maxVms: 20,
       maxCpu: 4,
@@ -204,7 +207,8 @@ export class VmService {
           ip: vm.guestIp,
           cidr: 24,
           gateway: "172.16.0.1",
-          mac: generateMac(vm.id)
+          mac: generateMac(vm.id),
+          ...(this.dnsServerIp ? { dns: this.dnsServerIp } : {})
         });
         await this.network.bringUpTap(tapName);
 
@@ -294,9 +298,23 @@ export class VmService {
           ip: vm.guestIp,
           cidr: 24,
           gateway: "172.16.0.1",
-          mac: generateMac(vm.id)
+          mac: generateMac(vm.id),
+          ...(this.dnsServerIp ? { dns: this.dnsServerIp } : {})
         });
         await this.network.bringUpTap(tapName);
+      } else if (this.dnsServerIp) {
+        // For cold boot VMs, networking is configured via kernel cmdline, but DNS may not be.
+        // If a custom DNS server is configured at the manager level, push it to the guest.
+        await this.agentClient.configureNetwork(vm.id, {
+          iface: "eth0",
+          ip: vm.guestIp,
+          cidr: 24,
+          gateway: "172.16.0.1",
+          mac: generateMac(vm.id),
+          dns: this.dnsServerIp,
+          // Avoid touching routes on cold-boot VMs in prod; just update resolv.conf.
+          dnsOnly: true
+        });
       }
 
       await this.agentClient.applyAllowlist(vm.id, request.allowIps, vm.outboundInternet);

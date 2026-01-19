@@ -32,7 +32,10 @@ export interface NetworkManager {
 export interface AgentClient {
   health(vmId: string): Promise<void>;
   applyAllowlist(vmId: string, allowIps: string[], outboundInternet: boolean): Promise<void>;
-  configureNetwork(vmId: string, payload: { ip: string; gateway: string; cidr?: number; mac?: string; iface?: string }): Promise<void>;
+  configureNetwork(
+    vmId: string,
+    payload: { ip: string; gateway: string; cidr?: number; mac?: string; iface?: string; dns?: string; dnsOnly?: boolean }
+  ): Promise<void>;
   exec(vmId: string, payload: VmExecRequest): Promise<{ exitCode: number; stdout: string; stderr: string }>;
   runTs(vmId: string, payload: VmRunTsRequest): Promise<{ exitCode: number; stdout: string; stderr: string }>;
   upload(vmId: string, dest: string, data: Buffer): Promise<void>;

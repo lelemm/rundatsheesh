@@ -32,7 +32,7 @@ export class VsockAgentClient implements AgentClient {
 
   async configureNetwork(
     vmId: string,
-    payload: { ip: string; gateway: string; cidr?: number; mac?: string; iface?: string }
+    payload: { ip: string; gateway: string; cidr?: number; mac?: string; iface?: string; dns?: string; dnsOnly?: boolean }
   ): Promise<void> {
     await this.request(vmId, "POST", "/net/config", payload);
   }

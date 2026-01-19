@@ -39,6 +39,11 @@ export interface EnvConfig {
     maxJsonResponseBytes: number;
     maxBinaryResponseBytes: number;
   };
+  /**
+   * Optional DNS server IP to be configured inside the guest (written to /etc/resolv.conf).
+   * If unset, the guest uses the VM gateway IP as DNS.
+   */
+  dnsServerIp?: string;
 }
 
 export function loadEnv(): EnvConfig {
@@ -128,6 +133,12 @@ export function loadEnv(): EnvConfig {
     throw new Error("SNAPSHOT_TEMPLATE_MEM_MB must be a positive number");
   }
 
+  const dnsServerIpRaw = (process.env.DNS_SERVER_IP ?? "").trim();
+  const dnsServerIp = dnsServerIpRaw ? dnsServerIpRaw : undefined;
+  if (dnsServerIp && !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(dnsServerIp)) {
+    throw new Error("DNS_SERVER_IP must be an IPv4 address");
+  }
+
   return {
     apiKey,
     adminEmail,
@@ -168,6 +179,7 @@ export function loadEnv(): EnvConfig {
       binaryTimeoutMs: parsePositiveInt(process.env.VSOCK_BINARY_TIMEOUT_MS, "VSOCK_BINARY_TIMEOUT_MS", 30_000),
       maxJsonResponseBytes: parsePositiveInt(process.env.VSOCK_MAX_JSON_RESPONSE_BYTES, "VSOCK_MAX_JSON_RESPONSE_BYTES", 2_000_000),
       maxBinaryResponseBytes: parsePositiveInt(process.env.VSOCK_MAX_BINARY_RESPONSE_BYTES, "VSOCK_MAX_BINARY_RESPONSE_BYTES", 50_000_000)
-    }
+    },
+    dnsServerIp
   };
 }
