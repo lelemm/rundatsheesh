@@ -1,52 +1,49 @@
-import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { FileService } from "../types/interfaces.js";
-import { resolveUserPath } from "./pathPolicy.js";
-import { USER_HOME } from "../config/constants.js";
-
-const execFileAsync = promisify(execFile);
-const USER_ID = 1000;
-const GROUP_ID = 1000;
+import { resolveWorkspacePathToChroot, resolveWorkspacePathToHost } from "./pathPolicy.js";
+import { JAIL_GROUP_ID, JAIL_USER_ID, spawnInJail, runInJail } from "../exec/jail.js";
 const MAX_UPLOAD_COMPRESSED_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_UNCOMPRESSED_BYTES = 50 * 1024 * 1024;
 const MAX_TAR_ENTRIES = 10_000;
 
 export class TarFileService implements FileService {
   async upload(dest: string, payload: NodeJS.ReadableStream): Promise<void> {
-    const destPath = resolveUserPath(dest);
-    await fs.mkdir(destPath, { recursive: true });
-    // Ensure extracted files are writable when extraction runs as uid/gid 1000.
-    await fs.chown(destPath, USER_ID, GROUP_ID).catch(() => undefined);
+    const destHost = resolveWorkspacePathToHost(dest);
+    const destChroot = resolveWorkspacePathToChroot(dest);
+    await fs.mkdir(destHost, { recursive: true });
+    // Ensure extracted files are writable when extraction runs as uid/gid 1000 inside the jail.
+    await fs.chown(destHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
 
-    const tmpDir = resolveUserPath(path.join(USER_HOME, ".tmp"));
-    await fs.mkdir(tmpDir, { recursive: true });
-    await fs.chown(tmpDir, USER_ID, GROUP_ID).catch(() => undefined);
-    const tmpPath = path.join(tmpDir, `upload-${randomUUID()}.tar.gz`);
+    const tmpDirHost = resolveWorkspacePathToHost("/workspace/.tmp");
+    await fs.mkdir(tmpDirHost, { recursive: true });
+    await fs.chown(tmpDirHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
+    const tmpName = `upload-${randomUUID()}.tar.gz`;
+    const tmpHost = path.join(tmpDirHost, tmpName);
+    const tmpChroot = resolveWorkspacePathToChroot(`/workspace/.tmp/${tmpName}`);
 
-    await streamToFile(payload, tmpPath, { maxBytes: MAX_UPLOAD_COMPRESSED_BYTES });
-    await fs.chown(tmpPath, USER_ID, GROUP_ID).catch(() => undefined);
-    await validateTar(tmpPath, { maxEntries: MAX_TAR_ENTRIES, maxUncompressedBytes: MAX_UPLOAD_UNCOMPRESSED_BYTES });
+    await streamToFile(payload, tmpHost, { maxBytes: MAX_UPLOAD_COMPRESSED_BYTES });
+    await fs.chown(tmpHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
+    await validateTarInJail(tmpChroot, { maxEntries: MAX_TAR_ENTRIES, maxUncompressedBytes: MAX_UPLOAD_UNCOMPRESSED_BYTES });
 
     // Extract as uid/gid 1000 and prevent archives from controlling ownership or modes.
-    await execFileAsync(
-      "tar",
-      ["--no-same-owner", "--no-same-permissions", "--numeric-owner", "-xzf", tmpPath, "-C", destPath],
-      { uid: USER_ID, gid: GROUP_ID }
-    );
-    await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+    const extract = await runInJail("/bin/tar", ["--no-same-owner", "--no-same-permissions", "--numeric-owner", "-xzf", tmpChroot, "-C", destChroot]);
+    if (extract.exitCode !== 0) {
+      throw new Error(`Failed to extract archive: ${extract.stderr.slice(0, 500)}`);
+    }
+    await fs.rm(tmpHost, { force: true }).catch(() => undefined);
   }
 
   async download(pathInput: string, replyStream: NodeJS.WritableStream): Promise<void> {
-    const resolved = resolveUserPath(pathInput);
-    const stats = await fs.stat(resolved);
-    const parent = stats.isDirectory() ? resolved : path.dirname(resolved);
-    const name = stats.isDirectory() ? "." : path.basename(resolved);
+    const resolvedHost = resolveWorkspacePathToHost(pathInput);
+    const resolvedChroot = resolveWorkspacePathToChroot(pathInput);
+    const stats = await fs.stat(resolvedHost);
+    const parentChroot = stats.isDirectory() ? resolvedChroot : path.posix.dirname(resolvedChroot);
+    const name = stats.isDirectory() ? "." : path.posix.basename(resolvedChroot);
 
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn("tar", ["-czf", "-", "-C", parent, name]);
+      const proc = spawnInJail("/bin/tar", ["-czf", "-", "-C", parentChroot, name]);
       proc.stdout.pipe(replyStream);
       proc.stderr.on("data", () => undefined);
       proc.on("error", reject);
@@ -92,8 +89,17 @@ async function streamToFile(stream: NodeJS.ReadableStream, target: string, opts:
   }
 }
 
-async function validateTar(archivePath: string, opts: { maxEntries: number; maxUncompressedBytes: number }): Promise<void> {
-  const { stdout: list } = await execFileAsync("tar", ["-tzf", archivePath]);
+async function validateTarInJail(
+  archiveChrootPath: string,
+  opts: { maxEntries: number; maxUncompressedBytes: number }
+): Promise<void> {
+  // Tar listing can be large; allow a bit more output for validation than generic exec.
+  const maxOutputBytes = 6_000_000;
+  const listRes = await runInJail("/bin/tar", ["-tzf", archiveChrootPath], { maxOutputBytes });
+  if (listRes.exitCode !== 0) {
+    throw new Error("Invalid tar archive");
+  }
+  const list = listRes.stdout;
   const entries = list.split("\n").filter(Boolean);
   if (entries.length > opts.maxEntries) {
     throw new Error("Too many tar entries");
@@ -104,7 +110,11 @@ async function validateTar(archivePath: string, opts: { maxEntries: number; maxU
     }
   }
 
-  const { stdout: verbose } = await execFileAsync("tar", ["-tvzf", archivePath]);
+  const verboseRes = await runInJail("/bin/tar", ["-tvzf", archiveChrootPath], { maxOutputBytes });
+  if (verboseRes.exitCode !== 0) {
+    throw new Error("Invalid tar archive");
+  }
+  const verbose = verboseRes.stdout;
   const lines = verbose.split("\n").filter(Boolean);
   let totalSize = 0;
   for (const line of lines) {

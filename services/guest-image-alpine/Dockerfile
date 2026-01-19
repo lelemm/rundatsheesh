@@ -172,6 +172,30 @@ RUN set -eux; \
     chown -R 1000:1000 /rootfs/opt/sandbox/usr 2>/dev/null || true; \
   fi
 
+# Stage deno + tar into /opt/sandbox so `/run-ts` and tar file ops can run inside the jail.
+RUN set -eux; \
+  stage_ldd() { \
+    target="$1"; \
+    chroot /rootfs /usr/bin/ldd "$target" 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do \
+      if [ -e "/rootfs$dep" ]; then \
+        mkdir -p "/rootfs/opt/sandbox$(dirname "$dep")"; \
+        cp -aL "/rootfs$dep" "/rootfs/opt/sandbox$dep"; \
+      fi; \
+    done; \
+  }; \
+  if [ -x /rootfs/usr/bin/deno ]; then \
+    mkdir -p /rootfs/opt/sandbox/usr/bin; \
+    cp -a /rootfs/usr/bin/deno /rootfs/opt/sandbox/usr/bin/deno; \
+    stage_ldd /usr/bin/deno; \
+  fi; \
+  if [ -x /rootfs/bin/tar ]; then \
+    mkdir -p /rootfs/opt/sandbox/bin; \
+    rm -f /rootfs/opt/sandbox/bin/tar; \
+    cp -a /rootfs/bin/tar /rootfs/opt/sandbox/bin/tar; \
+    stage_ldd /bin/tar; \
+  fi; \
+  chown -R 1000:1000 /rootfs/opt/sandbox/usr /rootfs/opt/sandbox/bin 2>/dev/null || true
+
 # Guest agent runtime (ESM + dependencies)
 COPY --from=guest-agent-builder /src/package.json /rootfs/opt/guest-agent/package.json
 COPY --from=guest-agent-builder /src/package-lock.json /rootfs/opt/guest-agent/package-lock.json

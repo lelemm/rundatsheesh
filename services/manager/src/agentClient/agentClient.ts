@@ -91,7 +91,9 @@ export class VsockAgentClient implements AgentClient {
 
     if (statusCode < 200 || statusCode >= 300) {
       const errText = responseBody.toString("utf-8", 0, Math.min(responseBody.length, 2048));
-      throw new Error(`Agent request failed (${method} ${pathName}) status=${statusCode}: ${errText}`);
+      const err = new Error(`Agent request failed (${method} ${pathName}) status=${statusCode}: ${errText}`);
+      (err as any).statusCode = statusCode;
+      throw err;
     }
 
     const text = responseBody.toString("utf-8");
@@ -124,7 +126,9 @@ export class VsockAgentClient implements AgentClient {
     }
     if (statusCode < 200 || statusCode >= 300) {
       const errText = responseBody.toString("utf-8", 0, Math.min(responseBody.length, 2048));
-      throw new Error(`Agent request failed (${method} ${pathName}) status=${statusCode}: ${errText}`);
+      const err = new Error(`Agent request failed (${method} ${pathName}) status=${statusCode}: ${errText}`);
+      (err as any).statusCode = statusCode;
+      throw err;
     }
     return responseBody;
   }

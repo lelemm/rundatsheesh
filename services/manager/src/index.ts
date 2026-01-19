@@ -51,7 +51,7 @@ async function main() {
   const agentClient = new VsockAgentClient({
     agentPort: env.agentVsockPort,
     // With jailer, the vsock UDS is inside the per-VM jail root; compute it deterministically.
-    vsockUdsPathForVm: (vmId) => firecrackerVsockUdsPath(env.jailer.chrootBaseDir, vmId),
+    vsockUdsPathForVm: (vmId: string) => firecrackerVsockUdsPath(env.jailer.chrootBaseDir, vmId),
     retry: { attempts: env.vsock.retryAttempts, delayMs: env.vsock.retryDelayMs },
     timeouts: { defaultMs: env.vsock.timeoutMs, healthMs: env.vsock.healthTimeoutMs, binaryMs: env.vsock.binaryTimeoutMs },
     limits: { maxJsonResponseBytes: env.vsock.maxJsonResponseBytes, maxBinaryResponseBytes: env.vsock.maxBinaryResponseBytes }

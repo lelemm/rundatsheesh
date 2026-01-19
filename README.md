@@ -17,7 +17,7 @@ It runs untrusted code **inside a Firecracker microVM**, exposes a small manager
 
 - The **manager** runs “host-side” orchestration logic in a privileged container (needs `/dev/kvm` + vsock device + `NET_ADMIN` for TAP/NAT).
 - The **guest agent** runs inside the VM and executes as user **`user` (uid/gid 1000)**.
-- File upload/download is done via **tar.gz streams** and is confined to **`/home/user`**; traversal and symlinks are rejected.
+- File upload/download is done via **tar.gz streams** and is confined to **`/workspace`**; traversal and symlinks are rejected.
 - TypeScript execution uses **Deno** inside the guest.
 
 ---

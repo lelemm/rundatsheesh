@@ -170,7 +170,7 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     fs.writeFileSync(path.join(sdkDir, "mod.ts"), 'export function greet(name: string) { return `hello ${name}`; }\n', "utf-8");
     fs.writeFileSync(
       path.join(appDir, "main.ts"),
-      'import { greet } from "file:///home/user/sdk/mod.ts";\nconsole.log(greet("world"));\n',
+      'import { greet } from "file:///workspace/sdk/mod.ts";\nconsole.log(greet("world"));\n',
       "utf-8"
     );
     const sdkTar = path.join(tmpDir, "sdk-upload.tar.gz");
@@ -268,7 +268,7 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     // Upload a local package to /home/user so we can install from a path without hitting the network.
     const { status, buf } = await apiBinary(
       "POST",
-      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user")}`,
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/workspace")}`,
       npmPkgUploadBuf ?? undefined
     );
     if (status !== 204) {
@@ -295,13 +295,18 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
       ].join(" && ")
     );
     expect(install.exitCode).toBe(0);
-    expect(install.stdout.trim()).toBe("ok");
+    const lastLine = install.stdout
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(-1)[0];
+    expect(lastLine).toBe("ok");
   });
 
   it("files: upload succeeds to /home/user", async () => {
     const { status, buf } = await apiBinary(
       "POST",
-      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user/project")}`,
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/workspace/project")}`,
       uploadBuf ?? undefined
     );
     if (status !== 204) {
@@ -316,10 +321,19 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     const big = new Uint8Array(11 * 1024 * 1024);
     const { status } = await apiBinary(
       "POST",
-      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user/project")}`,
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/workspace/project")}`,
       big
     );
     expect(status).toBe(413);
+  });
+
+  it("files: upload is rejected under /home/user (workspace-only contract)", async () => {
+    const { status } = await apiBinary(
+      "POST",
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user/project")}`,
+      uploadBuf ?? undefined
+    );
+    expect(status).toBe(400);
   });
 
   it("files: upload is rejected outside /home/user", async () => {
@@ -334,7 +348,7 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   it("files: download succeeds from /home/user and contents match", async () => {
     const { status, buf } = await apiBinary(
       "GET",
-      `${MANAGER_BASE}/v1/vms/${vmOk}/files/download?path=${encodeURIComponent("/home/user/project")}`
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/download?path=${encodeURIComponent("/workspace/project")}`
     );
     expect(status).toBe(200);
     const dlTar = path.join(tmpDir, "download.tar.gz");
@@ -351,17 +365,51 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     expect(status).toBe(400);
   });
 
+  it("files: download is rejected under /home/user (workspace-only contract)", async () => {
+    const { status } = await apiBinary(
+      "GET",
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/download?path=${encodeURIComponent("/home/user/project")}`
+    );
+    expect(status).toBe(400);
+  });
+
   it("run-ts: returns stdout", async () => {
     const ts = await vmRunTs(vmOk, "console.log(2 + 2)");
     expect(ts.exitCode).toBe(0);
     expect(ts.stdout.trim()).toBe("4");
   });
 
+  it("run-ts (deno): runs in the chroot jail and uses /workspace", async () => {
+    // Ensure a clean test dir.
+    const prep = await vmExec(vmOk, "rm -rf /workspace/deno-jail-test && mkdir -p /workspace/deno-jail-test");
+    expect(prep.exitCode).toBe(0);
+
+    const code = [
+      'console.log("cwd=" + Deno.cwd());',
+      'await Deno.writeTextFile("/workspace/deno-jail-test/marker.txt", "ok");',
+      "try {",
+      '  await Deno.readTextFile("/home/user/deno-jail-test/marker.txt");',
+      '  console.log("homeUserReadableUnexpected");',
+      "} catch {",
+      '  console.log("homeUserDenied");',
+      "}"
+    ].join("\n");
+
+    const res = await vmRunTs(vmOk, code);
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("cwd=/workspace");
+    expect(res.stdout).toContain("homeUserDenied");
+
+    const check = await vmExec(vmOk, "cat /workspace/deno-jail-test/marker.txt");
+    expect(check.exitCode).toBe(0);
+    expect(check.stdout.trim()).toBe("ok");
+  });
+
   it("run-ts: can import an uploaded SDK module from /home/user", async () => {
     // Upload SDK + app files into /home/user (tar contains sdk/ and app/ directories).
     const { status, buf } = await apiBinary(
       "POST",
-      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/home/user")}`,
+      `${MANAGER_BASE}/v1/vms/${vmOk}/files/upload?dest=${encodeURIComponent("/workspace")}`,
       sdkUploadBuf ?? undefined
     );
     if (status !== 204) {
@@ -370,9 +418,14 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     }
     expect(status).toBe(204);
 
-    const res = await vmRunTsPath(vmOk, "/home/user/app/main.ts");
+    const res = await vmRunTsPath(vmOk, "/workspace/app/main.ts");
     expect(res.exitCode).toBe(0);
     expect(res.stdout.trim()).toBe("hello world");
+  });
+
+  it("run-ts: rejects /home/user path inputs (workspace-only contract)", async () => {
+    const { status } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmOk}/run-ts`, { path: "/home/user/app/main.ts" });
+    expect(status).toBe(400);
   });
 
   it("snapshots: template-sized VM uses snapshot provision mode", async () => {
@@ -421,7 +474,7 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     let snap: SnapshotMeta | null = null;
     try {
       // 2) Upload SDK file into /home/user (simulate user-provided SDK).
-      const sdkPath = `/home/user/sdk-${Date.now()}.txt`;
+      const sdkPath = `/workspace/sdk-${Date.now()}.txt`;
       const write = await vmExec(base.id, `echo "sdk-ok" > ${sdkPath}`);
       expect(write.exitCode).toBe(0);
 
@@ -446,18 +499,18 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
       expect(b.provisionMode).toBe("snapshot");
 
       // Each VM should see the SDK file from the snapshot disk baseline.
-      const checkA = await vmExec(a.id, `cat /home/user/sdk-*.txt | tail -n 1`);
-      const checkB = await vmExec(b.id, `cat /home/user/sdk-*.txt | tail -n 1`);
+      const checkA = await vmExec(a.id, `cat /workspace/sdk-*.txt | tail -n 1`);
+      const checkB = await vmExec(b.id, `cat /workspace/sdk-*.txt | tail -n 1`);
       expect(checkA.exitCode).toBe(0);
       expect(checkB.exitCode).toBe(0);
       expect(checkA.stdout.trim()).toBe("sdk-ok");
       expect(checkB.stdout.trim()).toBe("sdk-ok");
 
       // Isolation check: write in A should not appear in B (per-VM disk clone).
-      const isoA = await vmExec(a.id, `echo "only-a" > /home/user/only-a.txt && cat /home/user/only-a.txt`);
+      const isoA = await vmExec(a.id, `echo "only-a" > /workspace/only-a.txt && cat /workspace/only-a.txt`);
       expect(isoA.exitCode).toBe(0);
       expect(isoA.stdout.trim()).toBe("only-a");
-      const isoB = await vmExec(b.id, `test -f /home/user/only-a.txt`);
+      const isoB = await vmExec(b.id, `test -f /workspace/only-a.txt`);
       expect(isoB.exitCode).not.toBe(0);
     } finally {
       await Promise.all([deleteVm(a.id), deleteVm(b.id)]);

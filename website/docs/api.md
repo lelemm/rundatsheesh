@@ -25,7 +25,7 @@ curl -sS \\
 
 ## Exec a shell command
 
-Runs as uid/gid **1000** inside the VM, confined to `/home/user`.
+Runs as uid/gid **1000** inside the VM, confined to `/workspace`.
 
 ```bash
 VM_ID="<put-id-here>"
@@ -49,7 +49,7 @@ curl -sS \\
 
 ## Upload files (tar.gz)
 
-Uploads must be a **tar.gz** stream and are restricted to **`/home/user`**.
+Uploads must be a **tar.gz** stream and are restricted to **`/workspace`**.
 
 Create an archive:
 

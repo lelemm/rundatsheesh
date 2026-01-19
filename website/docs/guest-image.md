@@ -49,26 +49,24 @@ Guest agent endpoints include:
 - `GET /files/download` (tar.gz)
 - `POST /firewall/allowlist`
 
-### 3) User isolation model: uid/gid 1000 and `/home/user`
+### 3) User isolation model: uid/gid 1000 and `/workspace`
 
-The guest image creates a user `user` with uid/gid **1000** and a home directory `/home/user`.
+The guest image creates a user `user` with uid/gid **1000** and a writable workspace mapped at `/workspace` (backed by `/home/user` on disk).
 
 Important behavior:
-- `exec` runs **chrooted to `/home/user`** (so `/etc`, `/proc`, `/usr`, etc. are not visible to untrusted code)
-- file upload/download is restricted to **`/home/user`** and uses tar.gz streams
+- `exec` runs **chrooted** and treats `/workspace` as the only supported filesystem root for user operations
+- file upload/download is restricted to **`/workspace`** and uses tar.gz streams
 - symlinks and traversal are rejected
 
-### 4) Toolchain inside `/home/user` (BusyBox)
+### 4) Toolchain inside the jail (BusyBox + staged tools)
 
-Because `exec` is chrooted to `/home/user`, a minimal command environment is installed there:
-- `/home/user/bin/busybox` plus symlinks (via `busybox --install -s`)
-- minimal `/home/user/dev/*` nodes like `null`, `zero`, `urandom`, etc.
+Because `exec` runs inside a minimal chroot jail, a small toolchain is available there (BusyBox plus staged binaries like `git`, `node`, `npm`, `tar`, and `deno`).
 
 ### 5) Deno for `run-ts`
 
-`run-ts` uses **Deno** installed into `/home/user/.deno` and executes with restricted permissions:
-- `--allow-read=/home/user`
-- `--allow-write=/home/user`
+`run-ts` uses **Deno** and executes with restricted permissions:
+- `--allow-read=/workspace`
+- `--allow-write=/workspace`
 - optional `--allow-net` if requested (and still subject to firewall allowlist)
 
 ## Uploading images to the manager

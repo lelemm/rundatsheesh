@@ -32,14 +32,26 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     reply.code(204);
   });
 
-  app.post("/exec", { bodyLimit: BODY_LIMITS.json }, async (request) => {
+  app.post("/exec", { bodyLimit: BODY_LIMITS.json }, async (request, reply) => {
     const payload = request.body as ExecRequest;
-    return opts.execRunner.exec(payload);
+    try {
+      return await opts.execRunner.exec(payload);
+    } catch (err) {
+      reply.code(400);
+      const detail = String((err as any)?.message ?? err);
+      return { message: "Invalid exec request", detail: detail.slice(0, 500) };
+    }
   });
 
-  app.post("/run-ts", { bodyLimit: BODY_LIMITS.json }, async (request) => {
+  app.post("/run-ts", { bodyLimit: BODY_LIMITS.json }, async (request, reply) => {
     const payload = request.body as RunTsRequest;
-    return opts.execRunner.runTs(payload);
+    try {
+      return await opts.execRunner.runTs(payload);
+    } catch (err) {
+      reply.code(400);
+      const detail = String((err as any)?.message ?? err);
+      return { message: "Invalid run-ts request", detail: detail.slice(0, 500) };
+    }
   });
 
   app.post("/files/upload", { bodyLimit: BODY_LIMITS.uploadCompressed }, async (request, reply) => {

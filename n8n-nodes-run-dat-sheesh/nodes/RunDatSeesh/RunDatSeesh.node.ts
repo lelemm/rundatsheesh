@@ -185,7 +185,7 @@ export class RunDatsheesh implements INodeType {
         name: "cwd",
         type: "string",
         default: "",
-        placeholder: "/home/user",
+        placeholder: "/workspace",
         displayOptions: { show: { resource: ["vms"], operationVms: ["exec"] } }
       },
       {
@@ -228,7 +228,7 @@ export class RunDatsheesh implements INodeType {
         name: "tsPath",
         type: "string",
         default: "",
-        description: "Path to a .ts file inside the VM under /home/user. Provide either Code or Path.",
+        description: "Path to a .ts file inside the VM under /workspace. Provide either Code or Path.",
         displayOptions: { show: { resource: ["vms"], operationVms: ["runTs"] } }
       },
       {
@@ -276,8 +276,8 @@ export class RunDatsheesh implements INodeType {
         name: "dest",
         type: "string",
         required: true,
-        default: "/home/user",
-        description: "Destination directory inside the VM (must be under /home/user).",
+        default: "/workspace",
+        description: "Destination directory inside the VM (must be under /workspace).",
         displayOptions: { show: { resource: ["files"], operationFiles: ["upload"] } }
       },
       {
@@ -294,8 +294,8 @@ export class RunDatsheesh implements INodeType {
         name: "path",
         type: "string",
         required: true,
-        default: "/home/user",
-        description: "Path inside the VM to download (must be under /home/user).",
+        default: "/workspace",
+        description: "Path inside the VM to download (must be under /workspace).",
         displayOptions: { show: { resource: ["files"], operationFiles: ["download"] } }
       },
       {

@@ -605,7 +605,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       schema: {
         summary: "Create snapshot from VM",
         description:
-          "Creates a VM snapshot (Firecracker mem+state) plus a disk baseline clone so that /home/user content (SDK uploads) is preserved for later restores.",
+          "Creates a VM snapshot (Firecracker mem+state) plus a disk baseline clone so that /workspace content (SDK uploads) is preserved for later restores.",
         tags: ["snapshots"],
         params: {
           type: "object",
@@ -682,7 +682,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       schema: {
         summary: "Create VM",
         description:
-          "Creates and boots a new microVM. If snapshotId is provided, the VM is restored from that snapshot (including /home/user disk baseline).",
+          "Creates and boots a new microVM. If snapshotId is provided, the VM is restored from that snapshot (including the /workspace disk baseline).",
         tags: ["vms"],
         openapi: {
           requestBody: {
@@ -843,7 +843,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       schema: {
         summary: "Execute command",
-        description: "Executes a shell command inside the VM as uid/gid 1000, confined to /home/user.",
+        description: "Executes a shell command inside the VM as uid/gid 1000, confined to /workspace.",
         tags: ["exec"],
         params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
         openapi: {
@@ -863,7 +863,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
                 },
                 examples: {
                   simple: { value: { cmd: "echo hello" } },
-                  withTimeout: { value: { cmd: "ls -la /home/user", timeoutMs: 30000 } }
+                  withTimeout: { value: { cmd: "ls -la /workspace", timeoutMs: 30000 } }
                 }
               }
             }
@@ -874,11 +874,11 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
           required: ["cmd"],
           properties: {
             cmd: { type: "string", description: "Shell command (bash -lc)" },
-            cwd: { type: "string", description: "Working directory (defaults to /home/user)" },
+            cwd: { type: "string", description: "Working directory (defaults to /workspace)" },
             env: { type: "object", additionalProperties: { type: "string" }, description: "Environment variables" },
             timeoutMs: { type: "number", description: "Timeout in milliseconds" }
           },
-          examples: [{ cmd: "echo hello" }, { cmd: "ls -la /home/user", timeoutMs: 30000 }]
+          examples: [{ cmd: "echo hello" }, { cmd: "ls -la /workspace", timeoutMs: 30000 }]
         },
         response: {
           200: {
@@ -919,7 +919,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       schema: {
         summary: "Run TypeScript (Deno)",
         description:
-          "Runs TypeScript inside the VM using Deno with strict /home/user read/write permissions. Provide either inline code or a file path.",
+          "Runs TypeScript inside the VM using Deno with strict /workspace read/write permissions. Provide either inline code or a file path.",
         tags: ["exec"],
         params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
         openapi: {
@@ -940,7 +940,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
                 },
                 examples: {
                   inline: { value: { code: "console.log(2 + 2)" } },
-                  file: { value: { path: "/home/user/app/main.ts" } }
+                  file: { value: { path: "/workspace/app/main.ts" } }
                 }
               }
             }
@@ -950,13 +950,13 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
           type: "object",
           anyOf: [{ required: ["code"] }, { required: ["path"] }],
           properties: {
-            path: { type: "string", description: "Path to a .ts file inside /home/user" },
+            path: { type: "string", description: "Path to a .ts file inside /workspace" },
             code: { type: "string", description: "Inline TypeScript code" },
             args: { type: "array", items: { type: "string" }, description: "Arguments passed to the program" },
             denoFlags: { type: "array", items: { type: "string" }, description: "Additional Deno flags (advanced)" },
             timeoutMs: { type: "number", description: "Timeout in milliseconds" }
           },
-          examples: [{ code: "console.log(2 + 2)" }, { path: "/home/user/app/main.ts" }]
+          examples: [{ code: "console.log(2 + 2)" }, { path: "/workspace/app/main.ts" }]
         },
         response: {
           200: {
@@ -992,7 +992,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       schema: {
         summary: "Upload files (tar.gz)",
         description:
-          "Uploads a tar.gz archive into the VM under the provided dest directory. Dest must be confined to /home/user. Symlinks and path traversal are rejected.",
+          "Uploads a tar.gz archive into the VM under the provided dest directory. Dest must be confined to /workspace. Symlinks and path traversal are rejected.",
         tags: ["files"],
         params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
         querystring: { type: "object", required: ["dest"], properties: { dest: { type: "string" } } },
@@ -1063,7 +1063,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
       schema: {
         summary: "Download files (tar.gz)",
-        description: "Downloads a directory tree as a tar.gz archive. Path must be confined to /home/user.",
+        description: "Downloads a directory tree as a tar.gz archive. Path must be confined to /workspace.",
         tags: ["files"],
         params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
         querystring: { type: "object", required: ["path"], properties: { path: { type: "string" } } },

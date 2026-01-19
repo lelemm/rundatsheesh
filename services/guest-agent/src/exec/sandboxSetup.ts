@@ -49,6 +49,7 @@ async function ensureBindMount(source: string, target: string): Promise<void> {
 export async function ensureExecSandboxReady(): Promise<void> {
   await ensureDir(SANDBOX_ROOT);
   await ensureDir(`${SANDBOX_ROOT}/dev`);
+  await ensureDir(`${SANDBOX_ROOT}/proc`);
   await ensureDir(`${SANDBOX_ROOT}/home/user`);
   await ensureDir(`${SANDBOX_ROOT}/workspace`);
 
@@ -59,5 +60,9 @@ export async function ensureExecSandboxReady(): Promise<void> {
   // Provide a working /dev inside the chroot. Creating device nodes in the image build
   // can fail depending on the filesystem/permissions; bind-mounting /dev is reliable.
   await ensureBindMount("/dev", `${SANDBOX_ROOT}/dev`);
+
+  // Some runtimes (notably Deno on Alpine/musl) rely on /proc for basic introspection
+  // (e.g. /proc/self/exe). Bind-mount /proc so jailed commands can run reliably.
+  await ensureBindMount("/proc", `${SANDBOX_ROOT}/proc`);
 }
 

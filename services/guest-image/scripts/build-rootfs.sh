@@ -149,6 +149,52 @@ curl -L "https://deno.land/install.sh" -o "$ROOTFS_DIR/tmp/install-deno.sh"
 chroot "$ROOTFS_DIR" /bin/bash -c "su - user -c 'DENO_INSTALL=/home/user/.deno bash /tmp/install-deno.sh'"
 rm -f "$ROOTFS_DIR/tmp/install-deno.sh"
 
+# Stage Deno + GNU tar into the /exec sandbox so /run-ts and files tar operations can run chrooted.
+cat >"$ROOTFS_DIR/tmp/stage-deno-tar-into-sandbox.sh" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+SANDBOX_ROOT=/opt/sandbox
+
+stage_file() {
+  local f="$1"
+  [ -e "$f" ] || return 0
+  mkdir -p "$SANDBOX_ROOT$(dirname "$f")"
+  cp -aL "$f" "$SANDBOX_ROOT$f"
+}
+
+stage_ldd() {
+  local target="$1"
+  local out=""
+  if ! out="$(ldd "$target" 2>/dev/null)"; then
+    return 0
+  fi
+  printf "%s\n" "$out" | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do
+    stage_file "$dep"
+  done
+}
+
+echo "Staging deno + tar into sandbox chroot ($SANDBOX_ROOT)..."
+
+# Deno is installed under /home/user/.deno (outside the sandbox). Copy it into /usr/bin inside the sandbox.
+if [ -x /home/user/.deno/bin/deno ]; then
+  mkdir -p "$SANDBOX_ROOT/usr/bin"
+  cp -a /home/user/.deno/bin/deno "$SANDBOX_ROOT/usr/bin/deno"
+  stage_ldd /home/user/.deno/bin/deno
+fi
+
+# Use GNU tar inside the sandbox (BusyBox tar may not support all flags/output formats we rely on).
+if [ -x /bin/tar ]; then
+  mkdir -p "$SANDBOX_ROOT/bin"
+  rm -f "$SANDBOX_ROOT/bin/tar"
+  cp -a /bin/tar "$SANDBOX_ROOT/bin/tar"
+  stage_ldd /bin/tar
+fi
+EOF
+chmod +x "$ROOTFS_DIR/tmp/stage-deno-tar-into-sandbox.sh"
+chroot "$ROOTFS_DIR" /bin/bash /tmp/stage-deno-tar-into-sandbox.sh
+rm -f "$ROOTFS_DIR/tmp/stage-deno-tar-into-sandbox.sh"
+
 # Install Node (tarball)
 curl -L "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" -o /tmp/node.tar.xz
 mkdir -p "$ROOTFS_DIR/usr/local"
