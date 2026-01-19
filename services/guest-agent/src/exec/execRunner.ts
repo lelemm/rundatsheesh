@@ -4,7 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ExecRunner } from "../types/interfaces.js";
 import type { ExecRequest, ExecResult, RunTsRequest } from "../types/agent.js";
-import { USER_HOME } from "../config/constants.js";
+import { SANDBOX_ROOT, USER_HOME } from "../config/constants.js";
 import { resolveUserPath } from "../files/pathPolicy.js";
 
 const USER_ID = 1000;
@@ -153,15 +153,17 @@ async function runSandboxedShell(
   cmd: string,
   options: { cwd: string; env?: Record<string, string>; timeoutMs?: number }
 ): Promise<ExecResult> {
-  // Hard confinement: chroot to /home/user, which means /etc, /proc, /usr, etc. are not visible.
-  // The guest image installs a static BusyBox toolchain under /home/user/bin.
-  const root = USER_HOME;
+  // Hard confinement: chroot to a dedicated sandbox root (not /home/user) so /home/user exists
+  // normally inside the chroot and we avoid symlink loops (/workspace <-> /home/user).
+  //
+  // The guest-agent bind-mounts the real /home/user into:
+  // - ${SANDBOX_ROOT}/home/user
+  // - ${SANDBOX_ROOT}/workspace
+  const root = SANDBOX_ROOT;
 
-  // Convert the resolved host path (/home/user/...) into a chroot path (/...).
+  // Convert the resolved host path (/home/user/...) into a chroot path under /workspace.
   const rel = path.relative(USER_HOME, options.cwd);
-  // Default to /workspace (an alias to `/` inside the chroot) to reduce confusion
-  // for clients that expect a "workspace" directory.
-  const cwdInChroot = rel && rel !== "." ? `/${rel}` : "/workspace";
+  const cwdInChroot = rel && rel !== "." ? `/workspace/${rel}` : "/workspace";
 
   // Invoke BusyBox explicitly so we don't depend on /bin/sh symlink existing in the chroot.
   const script = `cd ${shellQuoteSingle(cwdInChroot)} && ${cmd}`;

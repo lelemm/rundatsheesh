@@ -235,10 +235,19 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   });
 
   it("exec: mkdir inside /home/user and ls parent shows it", async () => {
-    // NOTE: /v1/vms/:id/exec is run inside a chroot rooted at /home/user, so paths should be relative to that root.
-    const mkdirLs = await vmExec(vmOk, "mkdir -p /integration-test-dir && ls -1 /");
+    // NOTE: /v1/vms/:id/exec is run inside a chroot rooted at /opt/sandbox.
+    // The real VM workspace (/home/user) is bind-mounted into the chroot at:
+    // - /workspace
+    // - /home/user
+    const mkdirLs = await vmExec(vmOk, "mkdir -p /workspace/integration-test-dir && ls -1 /workspace");
     expect(mkdirLs.exitCode).toBe(0);
     expect(mkdirLs.stdout.split("\n").map((s) => s.trim()).filter(Boolean)).toContain("integration-test-dir");
+  });
+
+  it("exec: git runs inside the sandbox", async () => {
+    const res = await vmExec(vmOk, "git --version");
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout.toLowerCase()).toContain("git version");
   });
 
   it("files: upload succeeds to /home/user", async () => {

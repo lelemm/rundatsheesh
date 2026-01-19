@@ -25,8 +25,9 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
-import { apiGetJson, apiRequestJson, apiUploadBinary, apiUploadBinaryWithProgress } from "@/lib/api"
-import { Plus, RefreshCw, Star, Trash2, Upload } from "lucide-react"
+import { apiGetJson, apiRequestJson, apiUploadBinaryWithProgress } from "@/lib/api"
+import { Plus, RefreshCw, Star, Trash2, Upload, Loader2 } from "lucide-react"
+import { toast } from "@/hooks/use-toast"
 
 type GuestImage = {
   id: string
@@ -47,6 +48,15 @@ function formatBytes(bytes: number | null | undefined): string {
   if (gb >= 1) return `${gb.toFixed(2)} GB`
   const mb = bytes / (1024 * 1024)
   return `${mb.toFixed(0)} MB`
+}
+
+type UploadProgress = { loaded: number; total: number | null; pct: number | null }
+
+function formatProgress(p: UploadProgress | null): string {
+  if (!p) return ""
+  const pct = Math.round(p.pct ?? 0)
+  if (!p.total) return `${formatBytes(p.loaded)} • ${pct}%`
+  return `${formatBytes(p.loaded)} / ${formatBytes(p.total)} • ${pct}%`
 }
 
 function FilePickButton(props: {
@@ -91,12 +101,14 @@ export function ImagesPanel() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
   const [newName, setNewName] = useState("")
   const [newDescription, setNewDescription] = useState("")
   const [newKernelFile, setNewKernelFile] = useState<File | null>(null)
   const [newRootfsFile, setNewRootfsFile] = useState<File | null>(null)
-  const [createKernelPct, setCreateKernelPct] = useState<number | null>(null)
-  const [createRootfsPct, setCreateRootfsPct] = useState<number | null>(null)
+  const [createKernelProgress, setCreateKernelProgress] = useState<UploadProgress | null>(null)
+  const [createRootfsProgress, setCreateRootfsProgress] = useState<UploadProgress | null>(null)
   const [uploadPctByKey, setUploadPctByKey] = useState<Record<string, number | null>>({})
   const [deleteTarget, setDeleteTarget] = useState<GuestImage | null>(null)
 
@@ -121,44 +133,51 @@ export function ImagesPanel() {
   const defaultId = useMemo(() => items.find((x) => x.isDefault)?.id ?? null, [items])
 
   const handleCreate = async () => {
+    if (isCreating) return
     const name = newName.trim()
     const description = newDescription.trim()
     if (!name || !description) return
-    setError(null)
+    setCreateError(null)
+    setIsCreating(true)
     try {
       const created = await apiRequestJson<GuestImage>("POST", "/v1/images", { name, description })
       if (newKernelFile) {
-        setCreateKernelPct(0)
+        setCreateKernelProgress({ loaded: 0, total: newKernelFile.size ?? null, pct: 0 })
         await apiUploadBinaryWithProgress({
           method: "PUT",
           path: `/v1/images/${encodeURIComponent(created.id)}/kernel`,
           data: newKernelFile,
           contentType: "application/octet-stream",
-          onProgress: (p) => setCreateKernelPct(p.pct),
+          onProgress: (p) => setCreateKernelProgress(p),
         })
       }
       if (newRootfsFile) {
-        setCreateRootfsPct(0)
+        setCreateRootfsProgress({ loaded: 0, total: newRootfsFile.size ?? null, pct: 0 })
         await apiUploadBinaryWithProgress({
           method: "PUT",
           path: `/v1/images/${encodeURIComponent(created.id)}/rootfs`,
           data: newRootfsFile,
           contentType: "application/octet-stream",
-          onProgress: (p) => setCreateRootfsPct(p.pct),
+          onProgress: (p) => setCreateRootfsProgress(p),
         })
       }
+      toast({ title: "Image created" })
       setCreateOpen(false)
       setNewName("")
       setNewDescription("")
       setNewKernelFile(null)
       setNewRootfsFile(null)
-      setCreateKernelPct(null)
-      setCreateRootfsPct(null)
+      setCreateKernelProgress(null)
+      setCreateRootfsProgress(null)
       await refresh()
     } catch (e: any) {
-      setError(String(e?.message ?? e))
-      setCreateKernelPct(null)
-      setCreateRootfsPct(null)
+      const msg = String(e?.message ?? e)
+      setCreateError(msg)
+      toast({ title: "Failed to create image", description: msg })
+      setCreateKernelProgress(null)
+      setCreateRootfsProgress(null)
+    } finally {
+      setIsCreating(false)
     }
   }
 
@@ -242,14 +261,31 @@ export function ImagesPanel() {
           >
             <RefreshCw className="w-4 h-4" />
           </Button>
-          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <Dialog
+            open={createOpen}
+            onOpenChange={(open) => {
+              if (isCreating) return
+              setCreateOpen(open)
+              if (open) setCreateError(null)
+            }}
+          >
             <DialogTrigger asChild>
               <Button className="bg-primary text-primary-foreground hover:bg-primary/90">
                 <Plus className="w-4 h-4 mr-2" />
                 New image
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-card border-border">
+            <DialogContent
+              className="bg-card border-border"
+              onEscapeKeyDown={(e) => {
+                if (!isCreating) return
+                e.preventDefault()
+              }}
+              onInteractOutside={(e) => {
+                if (!isCreating) return
+                e.preventDefault()
+              }}
+            >
               <DialogHeader>
                 <DialogTitle className="text-foreground">Create image</DialogTitle>
                 <DialogDescription className="text-muted-foreground">
@@ -257,6 +293,7 @@ export function ImagesPanel() {
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
+                {createError && <p className="text-sm text-destructive break-words">{createError}</p>}
                 <div className="space-y-2">
                   <Label htmlFor="img-name" className="text-foreground">
                     Name
@@ -267,6 +304,7 @@ export function ImagesPanel() {
                     onChange={(e) => setNewName(e.target.value)}
                     className="bg-input border-border text-foreground"
                     placeholder="e.g. Debian minimal"
+                    disabled={isCreating}
                   />
                 </div>
                 <div className="space-y-2">
@@ -279,39 +317,40 @@ export function ImagesPanel() {
                     onChange={(e) => setNewDescription(e.target.value)}
                     className="bg-input border-border text-foreground"
                     placeholder="What this image is for"
+                    disabled={isCreating}
                   />
                 </div>
                 <div className="space-y-2">
                   <Label className="text-foreground">Kernel (vmlinux)</Label>
                   <FilePickButton
-                    disabled={false}
+                    disabled={isCreating}
                     buttonText="Choose kernel file"
                     onFile={setNewKernelFile}
                     selectedName={newKernelFile?.name ?? null}
                   />
-                  {createKernelPct !== null && (
+                  {createKernelProgress !== null && (
                     <div className="w-full">
                       <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                        <div className="h-full bg-primary rounded-full" style={{ width: `${createKernelPct ?? 0}%` }} />
+                        <div className="h-full bg-primary rounded-full" style={{ width: `${createKernelProgress.pct ?? 0}%` }} />
                       </div>
-                      <div className="text-xs text-muted-foreground mt-1">Uploading kernel… {Math.round(createKernelPct ?? 0)}%</div>
+                      <div className="text-xs text-muted-foreground mt-1">Uploading kernel… {formatProgress(createKernelProgress)}</div>
                     </div>
                   )}
                 </div>
                 <div className="space-y-2">
                   <Label className="text-foreground">Rootfs (rootfs.ext4)</Label>
                   <FilePickButton
-                    disabled={false}
+                    disabled={isCreating}
                     buttonText="Choose rootfs file"
                     onFile={setNewRootfsFile}
                     selectedName={newRootfsFile?.name ?? null}
                   />
-                  {createRootfsPct !== null && (
+                  {createRootfsProgress !== null && (
                     <div className="w-full">
                       <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                        <div className="h-full bg-primary rounded-full" style={{ width: `${createRootfsPct ?? 0}%` }} />
+                        <div className="h-full bg-primary rounded-full" style={{ width: `${createRootfsProgress.pct ?? 0}%` }} />
                       </div>
-                      <div className="text-xs text-muted-foreground mt-1">Uploading rootfs… {Math.round(createRootfsPct ?? 0)}%</div>
+                      <div className="text-xs text-muted-foreground mt-1">Uploading rootfs… {formatProgress(createRootfsProgress)}</div>
                     </div>
                   )}
                 </div>
@@ -321,11 +360,23 @@ export function ImagesPanel() {
                   variant="outline"
                   onClick={() => setCreateOpen(false)}
                   className="border-border text-foreground hover:bg-secondary"
+                  disabled={isCreating}
                 >
                   Cancel
                 </Button>
-                <Button onClick={handleCreate} className="bg-primary text-primary-foreground hover:bg-primary/90">
-                  Create{newKernelFile || newRootfsFile ? " & upload" : ""}
+                <Button
+                  onClick={handleCreate}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90"
+                  disabled={isCreating || !newName.trim() || !newDescription.trim()}
+                >
+                  {isCreating ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Creating…
+                    </>
+                  ) : (
+                    <>Create{newKernelFile || newRootfsFile ? " & upload" : ""}</>
+                  )}
                 </Button>
               </DialogFooter>
             </DialogContent>

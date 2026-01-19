@@ -97,16 +97,19 @@ export class VmService {
       const snap = await this.storage.getSnapshotArtifactPaths(request.snapshotId);
       const meta = await this.storage.readSnapshotMeta(request.snapshotId);
       if (!meta || !meta.hasDisk) {
-        throw new Error("Snapshot not found or missing disk baseline");
+        throw new HttpError(404, "Snapshot not found or missing disk baseline");
       }
       if (meta.cpu !== request.cpu || meta.memMb !== request.memMb) {
-        throw new Error(`Snapshot cpu/mem mismatch: snapshot=${meta.cpu}/${meta.memMb} requested=${request.cpu}/${request.memMb}`);
+        throw new HttpError(
+          400,
+          `Snapshot cpu/mem mismatch: snapshot=${meta.cpu}/${meta.memMb} requested=${request.cpu}/${request.memMb}`
+        );
       }
       const hasAll = await Promise.all([fs.stat(snap.memPath), fs.stat(snap.statePath), fs.stat(snap.diskPath)])
         .then(() => true)
         .catch(() => false);
       if (!hasAll) {
-        throw new Error("Snapshot artifacts missing on disk");
+        throw new HttpError(409, "Snapshot artifacts missing on disk");
       }
       const diskBytes = (await fs.stat(snap.diskPath)).size;
       const resolved = await this.images.resolveForVmCreate(meta.imageId ?? request.imageId);

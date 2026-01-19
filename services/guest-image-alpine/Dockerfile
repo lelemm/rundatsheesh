@@ -62,21 +62,15 @@ RUN gcc -O2 -static -o /rootfs/sbin/init /tmp/guest-init.c \
   && chmod +x /rootfs/sbin/init \
   && rm -f /tmp/guest-init.c
 
-# Create runtime layout + untrusted user confinement under /home/user
+# Create runtime layout + untrusted user directory at /home/user (workspace)
 RUN set -eux; \
   mkdir -p /rootfs/home/user /rootfs/opt/guest-agent /rootfs/home/user/.deno /rootfs/home/user/.tmp; \
   # Create user/group deterministically (uid/gid 1000). Alpine uses busybox adduser/addgroup.
   chroot /rootfs /bin/sh -c 'addgroup -g 1000 user || true; adduser -D -u 1000 -G user -s /bin/bash user || true; passwd -l root || true'; \
-  # Confined toolchain under /home/user (static busybox)
-  mkdir -p /rootfs/home/user/bin /rootfs/home/user/dev /rootfs/home/user/tmp; \
-  # Compatibility: inside `exec`, we chroot to /home/user, so the visible root is `/`.
-  # Some tooling assumes the working directory is `/home/user`. Provide `/home/user` inside
-  # the chroot as a safe symlink back to the chroot root (`..`), without escaping the real FS.
-  mkdir -p /rootfs/home/user/home; \
-  ln -sfn .. /rootfs/home/user/home/user; \
-  # Provide `/workspace` inside the chroot as a friendly alias to the chroot root (`/`),
-  # which corresponds to the VM's real `/home/user`.
-  ln -sfn . /rootfs/home/user/workspace; \
+  # Confined toolchain under /opt/sandbox (static busybox)
+  mkdir -p /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/dev /rootfs/opt/sandbox/tmp; \
+  mkdir -p /rootfs/opt/sandbox/usr/bin /rootfs/opt/sandbox/etc/ssl/certs; \
+  mkdir -p /rootfs/opt/sandbox/home/user /rootfs/opt/sandbox/workspace; \
   bb_src=""; \
   for cand in /rootfs/bin/busybox.static /rootfs/bin/busybox /rootfs/usr/bin/busybox /rootfs/usr/sbin/busybox; do \
     if [ -x "$cand" ]; then bb_src="$cand"; break; fi; \
@@ -87,18 +81,18 @@ RUN set -eux; \
     ls -la /rootfs/usr/bin || true; \
     exit 1; \
   fi; \
-  cp "$bb_src" /rootfs/home/user/bin/busybox; \
-  chmod 0755 /rootfs/home/user/bin/busybox; \
-  # IMPORTANT: the guest-agent later does `chroot --userspec=1000:1000 /home/user /bin/busybox sh -c ...`
+  cp "$bb_src" /rootfs/opt/sandbox/bin/busybox; \
+  chmod 0755 /rootfs/opt/sandbox/bin/busybox; \
+  # IMPORTANT: the guest-agent later does `chroot --userspec=1000:1000 /opt/sandbox /bin/busybox sh -c ...`
   # so all applet symlinks must be valid *within* that chroot. If we install symlinks that point to
-  # `/home/user/bin/busybox`, they will break after chrooting (it would resolve to /home/user/home/user/...).
-  # Install inside a chroot rooted at /home/user so symlinks target `/bin/busybox` (valid inside the confinement).
-  chroot /rootfs/home/user /bin/busybox --install -s /bin; \
-  # Device nodes inside the /home/user chroot
-  mknod -m 666 /rootfs/home/user/dev/null c 1 3 || true; \
-  mknod -m 666 /rootfs/home/user/dev/zero c 1 5 || true; \
-  mknod -m 666 /rootfs/home/user/dev/random c 1 8 || true; \
-  mknod -m 666 /rootfs/home/user/dev/urandom c 1 9 || true; \
+  # `/opt/sandbox/bin/busybox`, they will break after chrooting. Install inside a chroot rooted at /opt/sandbox
+  # so symlinks target `/bin/busybox` (valid inside the confinement).
+  chroot /rootfs/opt/sandbox /bin/busybox --install -s /bin; \
+  # Device nodes inside the /opt/sandbox chroot
+  mknod -m 666 /rootfs/opt/sandbox/dev/null c 1 3 || true; \
+  mknod -m 666 /rootfs/opt/sandbox/dev/zero c 1 5 || true; \
+  mknod -m 666 /rootfs/opt/sandbox/dev/random c 1 8 || true; \
+  mknod -m 666 /rootfs/opt/sandbox/dev/urandom c 1 9 || true; \
   chown -R 1000:1000 /rootfs/home/user
 
 # Ensure paths expected by guest-init + guest-agent exist
@@ -109,26 +103,27 @@ RUN set -eux; \
   if [ ! -e /rootfs/home/user/.deno/bin/deno ]; then ln -s /usr/bin/deno /rootfs/home/user/.deno/bin/deno; fi; \
   chown -R 1000:1000 /rootfs/home/user/.deno
 
-# Stage git into /home/user so `exec` (which chroots to /home/user) can run it.
+# Stage git into /opt/sandbox so `exec` (which chroots to /opt/sandbox) can run it.
 RUN set -eux; \
   if [ -x /rootfs/usr/bin/git ]; then \
-    mkdir -p /rootfs/home/user/usr/bin; \
-    cp -a /rootfs/usr/bin/git /rootfs/home/user/usr/bin/git; \
+    mkdir -p /rootfs/opt/sandbox/usr/bin; \
+    cp -a /rootfs/usr/bin/git /rootfs/opt/sandbox/usr/bin/git; \
     execPath="$(chroot /rootfs /usr/bin/git --exec-path)"; \
     if [ -n "$execPath" ] && [ -d "/rootfs${execPath}" ]; then \
-      mkdir -p "/rootfs/home/user${execPath}"; \
-      cp -a "/rootfs${execPath}/." "/rootfs/home/user${execPath}/"; \
+      mkdir -p "/rootfs/opt/sandbox${execPath}"; \
+      cp -a "/rootfs${execPath}/." "/rootfs/opt/sandbox${execPath}/"; \
     fi; \
     if [ -f /rootfs/etc/ssl/certs/ca-certificates.crt ]; then \
-      mkdir -p /rootfs/home/user/etc/ssl/certs; \
-      cp -a /rootfs/etc/ssl/certs/ca-certificates.crt /rootfs/home/user/etc/ssl/certs/ca-certificates.crt; \
+      mkdir -p /rootfs/opt/sandbox/etc/ssl/certs; \
+      cp -a /rootfs/etc/ssl/certs/ca-certificates.crt /rootfs/opt/sandbox/etc/ssl/certs/ca-certificates.crt; \
     fi; \
     stage_ldd() { \
       target="$1"; \
       chroot /rootfs /usr/bin/ldd "$target" 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do \
         if [ -e "/rootfs$dep" ]; then \
-          mkdir -p "/rootfs/home/user$(dirname "$dep")"; \
-          cp -a "/rootfs$dep" "/rootfs/home/user$dep"; \
+          mkdir -p "/rootfs/opt/sandbox$(dirname "$dep")"; \
+          # Follow symlinks so the sandbox contains real loader/libs (e.g. /lib/ld-musl-*.so.1 is a symlink on some builds).
+          cp -aL "/rootfs$dep" "/rootfs/opt/sandbox$dep"; \
         fi; \
       done; \
     }; \
@@ -139,7 +134,7 @@ RUN set -eux; \
       done; \
     fi; \
     # Keep ownership consistent with the rest of /home/user (exec runs as uid/gid 1000).
-    chown -R 1000:1000 /rootfs/home/user/usr /rootfs/home/user/etc 2>/dev/null || true; \
+    chown -R 1000:1000 /rootfs/opt/sandbox/usr /rootfs/opt/sandbox/etc 2>/dev/null || true; \
   fi
 
 # Guest agent runtime (ESM + dependencies)

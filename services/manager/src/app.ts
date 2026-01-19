@@ -39,6 +39,7 @@ export function buildApp(options: BuildAppOptions) {
 
   app.setErrorHandler(async (err, request, reply) => {
     const statusCode = typeof (err as any)?.statusCode === "number" ? (err as any).statusCode : 500;
+    const exposeInternalErrors = (process.env.EXPOSE_INTERNAL_ERRORS ?? "").toLowerCase() === "true";
 
     if (err instanceof HttpError) {
       reply.code(err.statusCode);
@@ -53,7 +54,10 @@ export function buildApp(options: BuildAppOptions) {
 
     request.log.error({ err }, "Request failed");
     reply.code(500);
-    return reply.send({ message: "Internal Server Error" });
+    return reply.send({
+      message: exposeInternalErrors ? err.message : "Internal Server Error",
+      requestId: request.id
+    });
   });
 
   app.register(rateLimit, {

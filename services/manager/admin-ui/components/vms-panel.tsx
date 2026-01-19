@@ -48,6 +48,7 @@ import {
   Download,
   Search,
   RefreshCw,
+  Loader2,
   Cpu,
   MemoryStick,
   Wifi,
@@ -57,6 +58,7 @@ import {
 } from "lucide-react"
 import { apiGetJson, apiRequestJson } from "@/lib/api"
 import { subscribeAdminEvents } from "@/lib/admin-events"
+import { toast } from "@/hooks/use-toast"
 
 interface VM {
   id: string
@@ -84,6 +86,8 @@ export function VMsPanel() {
   const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState("")
   const [createDialogOpen, setCreateDialogOpen] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
   const [selectedVM, setSelectedVM] = useState<VM | null>(null)
   const [newVM, setNewVM] = useState({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "", imageId: "", diskSizeMb: 512 })
   const [vmToDelete, setVmToDelete] = useState<VM | null>(null)
@@ -163,6 +167,7 @@ export function VMsPanel() {
   }, [])
 
   const handleCreateVM = async () => {
+    if (isCreating) return
     const allowIps = newVM.allowInternet ? ["0.0.0.0/0"] : []
     const payload: any = {
       cpu: newVM.cpu,
@@ -173,10 +178,21 @@ export function VMsPanel() {
     }
     if (newVM.snapshotId) payload.snapshotId = newVM.snapshotId
     if (newVM.imageId) payload.imageId = newVM.imageId
-    await apiRequestJson("POST", "/v1/vms", payload)
-    setCreateDialogOpen(false)
-    setNewVM({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "", imageId: "", diskSizeMb: 512 })
-    await refresh()
+    setCreateError(null)
+    setIsCreating(true)
+    try {
+      await apiRequestJson("POST", "/v1/vms", payload)
+      toast({ title: "VM creation started" })
+      setCreateDialogOpen(false)
+      setNewVM({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "", imageId: "", diskSizeMb: 512 })
+      await refresh()
+    } catch (e: any) {
+      const msg = String(e?.message ?? e)
+      setCreateError(msg)
+      toast({ title: "Failed to create VM", description: msg })
+    } finally {
+      setIsCreating(false)
+    }
   }
 
   const handleDeleteVM = async (id: string) => {
@@ -296,14 +312,31 @@ export function VMsPanel() {
             <h2 className="text-2xl font-semibold text-foreground">Virtual Machines</h2>
             <p className="text-muted-foreground text-sm mt-1">Manage your Firecracker microVMs</p>
           </div>
-          <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+          <Dialog
+            open={createDialogOpen}
+            onOpenChange={(open) => {
+              if (isCreating) return
+              setCreateDialogOpen(open)
+              if (open) setCreateError(null)
+            }}
+          >
             <DialogTrigger asChild>
               <Button className="bg-primary text-primary-foreground hover:bg-primary/90">
                 <Plus className="w-4 h-4 mr-2" />
                 Create VM
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-card border-border">
+            <DialogContent
+              className="bg-card border-border"
+              onEscapeKeyDown={(e) => {
+                if (!isCreating) return
+                e.preventDefault()
+              }}
+              onInteractOutside={(e) => {
+                if (!isCreating) return
+                e.preventDefault()
+              }}
+            >
               <DialogHeader>
                 <DialogTitle className="text-foreground">Create Virtual Machine</DialogTitle>
                 <DialogDescription className="text-muted-foreground">
@@ -311,6 +344,7 @@ export function VMsPanel() {
                 </DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
+                {createError && <p className="text-sm text-destructive break-words">{createError}</p>}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="cpu" className="text-foreground">
@@ -324,6 +358,7 @@ export function VMsPanel() {
                       value={newVM.cpu}
                       onChange={(e) => setNewVM({ ...newVM, cpu: Number.parseInt(e.target.value) || 1 })}
                       className="bg-input border-border text-foreground"
+                      disabled={isCreating}
                     />
                   </div>
                   <div className="space-y-2">
@@ -338,6 +373,7 @@ export function VMsPanel() {
                       value={newVM.memMb}
                       onChange={(e) => setNewVM({ ...newVM, memMb: Number.parseInt(e.target.value) || 512 })}
                       className="bg-input border-border text-foreground"
+                      disabled={isCreating}
                     />
                   </div>
                 </div>
@@ -351,6 +387,7 @@ export function VMsPanel() {
                     value={newVM.snapshotId}
                     onChange={(e) => setNewVM({ ...newVM, snapshotId: e.target.value })}
                     className="bg-input border-border text-foreground placeholder:text-muted-foreground"
+                    disabled={isCreating}
                   />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -363,6 +400,7 @@ export function VMsPanel() {
                       value={newVM.imageId}
                       onChange={(e) => setNewVM({ ...newVM, imageId: e.target.value })}
                       className="w-full h-10 rounded-md border border-border bg-input px-3 text-sm text-foreground"
+                      disabled={isCreating}
                     >
                       <option value="">Default image</option>
                       {images.map((img) => (
@@ -385,6 +423,7 @@ export function VMsPanel() {
                       value={newVM.diskSizeMb}
                       onChange={(e) => setNewVM({ ...newVM, diskSizeMb: Number.parseInt(e.target.value) || 512 })}
                       className="bg-input border-border text-foreground"
+                      disabled={isCreating}
                     />
                   </div>
                 </div>
@@ -396,6 +435,7 @@ export function VMsPanel() {
                     id="internet"
                     checked={newVM.allowInternet}
                     onCheckedChange={(checked) => setNewVM({ ...newVM, allowInternet: checked })}
+                    disabled={isCreating}
                   />
                 </div>
               </div>
@@ -404,11 +444,23 @@ export function VMsPanel() {
                   variant="outline"
                   onClick={() => setCreateDialogOpen(false)}
                   className="border-border text-foreground hover:bg-secondary"
+                  disabled={isCreating}
                 >
                   Cancel
                 </Button>
-                <Button onClick={handleCreateVM} className="bg-primary text-primary-foreground hover:bg-primary/90">
-                  Create VM
+                <Button
+                  onClick={handleCreateVM}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90"
+                  disabled={isCreating}
+                >
+                  {isCreating ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Creating…
+                    </>
+                  ) : (
+                    "Create VM"
+                  )}
                 </Button>
               </DialogFooter>
             </DialogContent>

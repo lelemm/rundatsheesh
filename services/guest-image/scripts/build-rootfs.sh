@@ -42,32 +42,27 @@ apt-get install -y --no-install-recommends \
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
-mkdir -p /home/user /opt/guest-agent /home/user/.deno /home/user/.tmp
+mkdir -p /home/user /opt/guest-agent /home/user/.deno /home/user/.tmp /home/user/tmp
 
-# Create a minimal chroot-able toolchain under /home/user so untrusted exec can be confined
-# to /home/user without access to the guest OS filesystem (/etc, /proc, /usr, ...).
-mkdir -p /home/user/bin /home/user/dev /home/user/tmp
-cp /bin/busybox /home/user/bin/busybox
-chmod 0755 /home/user/bin/busybox
-/home/user/bin/busybox --install -s /home/user/bin
+# Create a minimal chroot-able toolchain under /opt/sandbox so untrusted exec can be confined
+# without having to chroot directly into /home/user (avoids /home/user <-> /workspace alias loops).
+SANDBOX_ROOT=/opt/sandbox
+mkdir -p "$SANDBOX_ROOT/bin" "$SANDBOX_ROOT/dev" "$SANDBOX_ROOT/tmp" "$SANDBOX_ROOT/usr/bin" "$SANDBOX_ROOT/etc/ssl/certs"
+mkdir -p "$SANDBOX_ROOT/home/user" "$SANDBOX_ROOT/workspace"
 
-# Compatibility: inside `exec`, we chroot to /home/user, so the visible root is `/`.
-# Some tooling assumes the working directory is `/home/user`. Provide `/home/user` inside
-# the chroot as a safe symlink back to the chroot root (`..`), without escaping the real FS.
-mkdir -p /home/user/home
-ln -sfn .. /home/user/home/user
-
-# Provide `/workspace` inside the chroot as a friendly alias to the chroot root (`/`),
-# which corresponds to the VM's real `/home/user`.
-ln -sfn . /home/user/workspace
+# BusyBox toolchain inside the sandbox (exec uses: chroot $SANDBOX_ROOT /bin/busybox sh -c ...)
+cp /bin/busybox "$SANDBOX_ROOT/bin/busybox"
+chmod 0755 "$SANDBOX_ROOT/bin/busybox"
+chroot "$SANDBOX_ROOT" /bin/busybox --install -s /bin
 
 stage_file_into_user_chroot() {
   local f="$1"
   if [ ! -e "$f" ]; then
     return 0
   fi
-  mkdir -p "/home/user$(dirname "$f")"
-  cp -a "$f" "/home/user$f"
+  mkdir -p "$SANDBOX_ROOT$(dirname "$f")"
+  # Follow symlinks so the sandbox contains real loader/libs (e.g. /lib64/ld-linux-*.so.2 is often a symlink).
+  cp -aL "$f" "$SANDBOX_ROOT$f"
 }
 
 stage_bin_into_user_chroot() {
@@ -76,8 +71,8 @@ stage_bin_into_user_chroot() {
     echo "missing executable: $bin" >&2
     exit 1
   fi
-  mkdir -p "/home/user$(dirname "$bin")"
-  cp -a "$bin" "/home/user$bin"
+  mkdir -p "$SANDBOX_ROOT$(dirname "$bin")"
+  cp -a "$bin" "$SANDBOX_ROOT$bin"
 }
 
 stage_ldd_deps_into_user_chroot() {
@@ -97,29 +92,29 @@ stage_ldd_deps_into_user_chroot() {
   done
 }
 
-# Stage git into /home/user so `exec` (which chroots to /home/user) can run it.
-echo "Staging git into /home/user chroot..."
+# Stage git into sandbox so `exec` (which chroots to $SANDBOX_ROOT) can run it.
+echo "Staging git into sandbox chroot ($SANDBOX_ROOT)..."
 stage_bin_into_user_chroot /usr/bin/git
 
 if [ -d /usr/lib/git-core ]; then
-  mkdir -p /home/user/usr/lib/git-core
-  cp -a /usr/lib/git-core/. /home/user/usr/lib/git-core/
+  mkdir -p "$SANDBOX_ROOT/usr/lib/git-core"
+  cp -a /usr/lib/git-core/. "$SANDBOX_ROOT/usr/lib/git-core/"
 fi
 
 if [ -d /usr/libexec/git-core ]; then
-  mkdir -p /home/user/usr/libexec/git-core
-  cp -a /usr/libexec/git-core/. /home/user/usr/libexec/git-core/
+  mkdir -p "$SANDBOX_ROOT/usr/libexec/git-core"
+  cp -a /usr/libexec/git-core/. "$SANDBOX_ROOT/usr/libexec/git-core/"
 fi
 
 if [ -d /usr/share/git-core ]; then
-  mkdir -p /home/user/usr/share/git-core
-  cp -a /usr/share/git-core/. /home/user/usr/share/git-core/
+  mkdir -p "$SANDBOX_ROOT/usr/share/git-core"
+  cp -a /usr/share/git-core/. "$SANDBOX_ROOT/usr/share/git-core/"
 fi
 
 # TLS CA bundle for https remotes
 stage_file_into_user_chroot /etc/ssl/certs/ca-certificates.crt
 
-# Stage shared libs needed by git + its helper binaries into /home/user so the chroot can run them.
+# Stage shared libs needed by git + its helper binaries into sandbox so the chroot can run them.
 stage_ldd_deps_into_user_chroot /usr/bin/git
 
 if [ -d /usr/lib/git-core ]; then
@@ -135,11 +130,11 @@ if [ -d /usr/libexec/git-core ]; then
 fi
 
 # Minimal device nodes for common tooling (avoid failures for redirects etc).
-# These nodes are inside the chroot (/home/user) and do not expose host devices.
-mknod -m 666 /home/user/dev/null c 1 3 || true
-mknod -m 666 /home/user/dev/zero c 1 5 || true
-mknod -m 666 /home/user/dev/random c 1 8 || true
-mknod -m 666 /home/user/dev/urandom c 1 9 || true
+# These nodes are inside the sandbox chroot and do not expose host devices.
+mknod -m 666 "$SANDBOX_ROOT/dev/null" c 1 3 || true
+mknod -m 666 "$SANDBOX_ROOT/dev/zero" c 1 5 || true
+mknod -m 666 "$SANDBOX_ROOT/dev/random" c 1 8 || true
+mknod -m 666 "$SANDBOX_ROOT/dev/urandom" c 1 9 || true
 
 chown -R 1000:1000 /home/user
 chown -R 1000:1000 /home/user/.deno /home/user/.tmp /home/user/tmp
