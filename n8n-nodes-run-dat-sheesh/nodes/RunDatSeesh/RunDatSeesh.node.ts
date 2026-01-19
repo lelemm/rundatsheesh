@@ -212,7 +212,7 @@ export class RunDatSeesh implements INodeType {
             ]
           }
         ],
-        displayOptions: { show: { resource: ["vms"], operationVms: ["exec"] } }
+        displayOptions: { show: { resource: ["vms"], operationVms: ["exec", "runTs"] } }
       },
       {
         displayName: "TypeScript Code",
@@ -492,6 +492,12 @@ export class RunDatSeesh implements INodeType {
         const tsPath = (this.getNodeParameter("tsPath", i) as string).trim();
         const argsRaw = (this.getNodeParameter("args", i) as string).trim();
         const denoFlagsRaw = (this.getNodeParameter("denoFlags", i) as string).trim();
+        const envFc = this.getNodeParameter("env", i, {}) as any;
+
+        const envPairs: Array<{ name?: string; value?: string }> = Array.isArray(envFc?.values) ? envFc.values : [];
+        const envArray = envPairs
+          .filter((v) => v?.name)
+          .map((v) => `${String(v.name)}=${String(v.value ?? "")}`);
 
         if (!code && !tsPath) {
           throw new NodeOperationError(this.getNode(), "Provide either TypeScript Code or TypeScript File Path", {
@@ -505,6 +511,7 @@ export class RunDatSeesh implements INodeType {
         if (argsRaw) body.args = argsRaw.split(",").map((s) => s.trim()).filter(Boolean);
         if (denoFlagsRaw) body.denoFlags = denoFlagsRaw.split(",").map((s) => s.trim()).filter(Boolean);
         if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
+        if (envArray.length) body.env = envArray;
 
         const data = await runDatsheeshApiRequest.call(this, "POST", `/v1/vms/${encodeURIComponent(vmId)}/run-ts`, { body });
         returnData.push({ json: data });

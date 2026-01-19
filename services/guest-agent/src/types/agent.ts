@@ -12,6 +12,11 @@ export interface RunTsRequest {
   denoFlags?: string[];
   timeoutMs?: number;
   allowNet?: boolean;
+  /**
+   * Additional environment variables for the program execution.
+   * Format: ["KEY=value", ...]
+   */
+  env?: string[];
 }
 
 export interface ExecResult {

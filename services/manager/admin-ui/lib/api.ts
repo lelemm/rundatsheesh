@@ -5,9 +5,42 @@ export async function apiGetJson<T>(path: string): Promise<T> {
   })
   if (!res.ok) {
     const text = await res.text().catch(() => "")
-    throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`)
+    throw toApiError({ status: res.status, statusText: res.statusText, responseText: text })
   }
   return (await res.json()) as T
+}
+
+function toApiError(input: { status: number; statusText: string; responseText: string }): Error {
+  const { status, statusText, responseText } = input
+  const trimmed = (responseText ?? "").trim()
+
+  let message = trimmed
+  let parsedBody: unknown = undefined
+  if (trimmed) {
+    try {
+      parsedBody = JSON.parse(trimmed) as unknown
+      if (parsedBody && typeof parsedBody === "object" && "message" in (parsedBody as any) && typeof (parsedBody as any).message === "string") {
+        message = (parsedBody as any).message as string
+      }
+    } catch {
+      // not JSON; keep message as text
+    }
+  }
+
+  if (!message) {
+    message = `HTTP ${status} ${statusText}`
+  }
+
+  const err = new Error(message)
+  err.name = "ApiError"
+  ;(err as any).status = status
+  ;(err as any).statusText = statusText
+  if (parsedBody !== undefined) {
+    ;(err as any).body = parsedBody
+  } else if (trimmed) {
+    ;(err as any).body = trimmed
+  }
+  return err
 }
 
 export async function apiRequestJson<T>(
@@ -27,7 +60,7 @@ export async function apiRequestJson<T>(
   })
   if (!res.ok) {
     const text = await res.text().catch(() => "")
-    throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`)
+    throw toApiError({ status: res.status, statusText: res.statusText, responseText: text })
   }
   if (res.status === 204) {
     return undefined as T
@@ -52,7 +85,7 @@ export async function apiUploadBinary(
   })
   if (!res.ok) {
     const text = await res.text().catch(() => "")
-    throw new Error(`HTTP ${res.status} ${res.statusText}: ${text}`)
+    throw toApiError({ status: res.status, statusText: res.statusText, responseText: text })
   }
 }
 
@@ -81,7 +114,7 @@ export async function apiUploadBinaryWithProgress(input: {
 
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) return resolve()
-      reject(new Error(`HTTP ${xhr.status} ${xhr.statusText}: ${xhr.responseText ?? ""}`))
+      reject(toApiError({ status: xhr.status, statusText: xhr.statusText, responseText: xhr.responseText ?? "" }))
     }
     xhr.onerror = () => reject(new Error("Network error"))
     xhr.onabort = () => reject(new Error("Upload aborted"))

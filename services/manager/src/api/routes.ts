@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { AppDeps } from "../types/deps.js";
 import { DashboardService } from "../telemetry/dashboardService.js";
 import { BodyTooLargeError, readStreamToBuffer, writeStreamToFile } from "../utils/streams.js";
+import { HttpError } from "./httpErrors.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 
@@ -16,6 +17,23 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     uploadCompressed: 10 * 1024 * 1024,
     // Images can be large; we stream uploads to disk but still enforce an upper bound.
     imageBinary: 3 * 1024 * 1024 * 1024
+  };
+
+  // NOTE: AJV is configured to remove unknown properties. If an error response schema is
+  // `{ type: "object" }` with no properties, Fastify will strip `{ message }` and clients
+  // end up seeing `{}`. Keep a consistent error shape across routes.
+  const ERROR_RESPONSE = {
+    type: "object",
+    properties: { message: { type: "string" } },
+    additionalProperties: true
+  } as const;
+
+  const requireValidVmId = (id: string) => {
+    const raw = String(id ?? "").trim();
+    const lowered = raw.toLowerCase();
+    if (!raw || lowered === "undefined" || lowered === "null") {
+      throw new HttpError(400, "Invalid VM id");
+    }
   };
 
   const sessions = (app as any).sessions as { get: (id?: string | null) => any } | undefined;
@@ -614,14 +632,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         },
         response: {
           201: { type: "object", additionalProperties: true },
-          400: { type: "object" },
-          401: { type: "object" },
-          404: { type: "object" }
+          400: ERROR_RESPONSE,
+          401: ERROR_RESPONSE,
+          404: ERROR_RESPONSE
         }
       }
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      requireValidVmId(id);
       const snap = await opts.deps.vmService.createSnapshot(id);
       reply.code(201);
       return snap;
@@ -659,12 +678,13 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         },
         response: {
           200: { type: "object", additionalProperties: true },
-          404: { type: "object" }
+          404: ERROR_RESPONSE
         }
       }
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      requireValidVmId(id);
       const vm = await opts.deps.vmService.get(id);
       if (!vm) {
         reply.code(404);
@@ -795,6 +815,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      requireValidVmId(id);
       await opts.deps.vmService.start(id);
       reply.code(204);
     }
@@ -813,6 +834,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      requireValidVmId(id);
       await opts.deps.vmService.stop(id);
       reply.code(204);
     }
@@ -831,6 +853,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      requireValidVmId(id);
       await opts.deps.vmService.destroy(id);
       reply.code(204);
     }
@@ -891,12 +914,13 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
             },
             examples: [{ exitCode: 0, stdout: "hello\n", stderr: "" }]
           },
-          400: { type: "object" }
+          400: ERROR_RESPONSE
         }
       }
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      requireValidVmId(id);
       const body = request.body as { cmd?: string; cwd?: string; env?: Record<string, string>; timeoutMs?: number } | undefined;
       if (!body || typeof body.cmd !== "string") {
         reply.code(400);
@@ -935,7 +959,12 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
                     code: { type: "string" },
                     args: { type: "array", items: { type: "string" } },
                     denoFlags: { type: "array", items: { type: "string" } },
-                    timeoutMs: { type: "number" }
+                    timeoutMs: { type: "number" },
+                    env: {
+                      type: "array",
+                      items: { type: "string" },
+                      description: 'Environment variables in the format "KEY=value"'
+                    }
                   }
                 },
                 examples: {
@@ -954,7 +983,12 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
             code: { type: "string", description: "Inline TypeScript code" },
             args: { type: "array", items: { type: "string" }, description: "Arguments passed to the program" },
             denoFlags: { type: "array", items: { type: "string" }, description: "Additional Deno flags (advanced)" },
-            timeoutMs: { type: "number", description: "Timeout in milliseconds" }
+            timeoutMs: { type: "number", description: "Timeout in milliseconds" },
+            env: {
+              type: "array",
+              items: { type: "string" },
+              description: 'Environment variables in the format "KEY=value"'
+            }
           },
           examples: [{ code: "console.log(2 + 2)" }, { path: "/workspace/app/main.ts" }]
         },
@@ -969,13 +1003,16 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
             },
             examples: [{ exitCode: 0, stdout: "4\n", stderr: "" }]
           },
-          400: { type: "object" }
+          400: ERROR_RESPONSE
         }
       }
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
-      const body = request.body as { path?: string; code?: string; args?: string[]; denoFlags?: string[]; timeoutMs?: number } | undefined;
+      requireValidVmId(id);
+      const body = request.body as
+        | { path?: string; code?: string; args?: string[]; denoFlags?: string[]; timeoutMs?: number; env?: string[] }
+        | undefined;
       if (!body || (!body.path && !body.code)) {
         reply.code(400);
         return { message: "Invalid request body" };
@@ -1025,6 +1062,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      requireValidVmId(id);
       const dest = (request.query as { dest?: string }).dest ?? "";
       if (!dest) {
         reply.code(400);
@@ -1081,12 +1119,13 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         },
         response: {
           200: { type: "string", description: "tar.gz binary stream" },
-          400: { type: "object" }
+          400: ERROR_RESPONSE
         }
       }
     },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+      requireValidVmId(id);
       const path = (request.query as { path?: string }).path ?? "";
       if (!path) {
         reply.code(400);

@@ -333,7 +333,7 @@ export class VmService {
   async createSnapshot(id: string): Promise<SnapshotMeta> {
     const vm = await this.requireVm(id);
     if (vm.state !== "RUNNING") {
-      throw new Error("VM must be RUNNING to snapshot");
+      throw new HttpError(409, `VM must be RUNNING to snapshot (state=${vm.state})`);
     }
 
     // Best-effort filesystem quiesce for /home/user content.
@@ -457,7 +457,10 @@ export class VmService {
     return result;
   }
 
-  async runTs(id: string, payload: { path?: string; code?: string; args?: string[]; denoFlags?: string[]; timeoutMs?: number }) {
+  async runTs(
+    id: string,
+    payload: { path?: string; code?: string; args?: string[]; denoFlags?: string[]; timeoutMs?: number; env?: string[] }
+  ) {
     const vm = await this.requireVm(id);
     if (typeof payload.timeoutMs === "number" && payload.timeoutMs > this.limits.maxRunTsTimeoutMs) {
       throw new HttpError(400, `timeoutMs exceeds maxRunTsTimeoutMs=${this.limits.maxRunTsTimeoutMs}`);
@@ -490,8 +493,8 @@ export class VmService {
 
   private async requireVm(id: string): Promise<VmRecord> {
     const vm = await this.store.get(id);
-    if (!vm) {
-      throw new Error("VM not found");
+    if (!vm || vm.state === "DELETED") {
+      throw new HttpError(404, `VM ${id} not found`);
     }
     return vm;
   }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../../app.js";
+import { HttpError } from "../httpErrors.js";
 import type { AppDeps } from "../../types/deps.js";
 import type { VmPublic } from "../../types/vm.js";
 
@@ -161,5 +162,44 @@ describe("manager API", () => {
     expect(tsRes.statusCode).toBe(200);
     expect(service.execCalls[0].cmd).toBe("id");
     expect(service.runTsCalls.length).toBe(1);
+  });
+
+  it("returns 400 for invalid VM id (undefined)", async () => {
+    const service = new FakeVmService();
+    const app = buildTestApp(service);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/vms/undefined/exec",
+      headers: { "x-api-key": apiKey },
+      payload: { cmd: "id" }
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body)).toEqual({ message: "Invalid VM id" });
+  });
+
+  it("passes through HttpError status codes from services", async () => {
+    class ThrowingVmService extends FakeVmService {
+      override async exec(
+        id: string,
+        payload: { cmd: string }
+      ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+        this.execCalls.push({ id, cmd: payload.cmd });
+        throw new HttpError(404, `VM ${id} not found`);
+      }
+    }
+    const service = new ThrowingVmService();
+    const app = buildTestApp(service);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/vms/missing/exec",
+      headers: { "x-api-key": apiKey },
+      payload: { cmd: "id" }
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(JSON.parse(res.body)).toEqual({ message: "VM missing not found" });
   });
 });

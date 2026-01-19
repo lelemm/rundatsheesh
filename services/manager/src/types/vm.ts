@@ -63,4 +63,9 @@ export interface VmRunTsRequest {
   denoFlags?: string[];
   timeoutMs?: number;
   allowNet?: boolean;
+  /**
+   * Additional environment variables passed to the run-ts process.
+   * Format: ["KEY=value", ...]
+   */
+  env?: string[];
 }
