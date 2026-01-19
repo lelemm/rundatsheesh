@@ -290,6 +290,8 @@ export class VmService {
       const tAgentHealthStart = Date.now();
       await this.agentClient.health(vm.id);
       const agentHealthMs = Date.now() - tAgentHealthStart;
+      // Keep guest clock in sync so TLS validation works reliably (cert NotValidYet issues are usually clock skew).
+      await this.agentClient.syncTime(vm.id, { unixTimeMs: Date.now() }).catch(() => undefined);
 
       // After snapshot restore, reconfigure guest networking over VSock, then bring the tap up.
       if (mode === "snapshot") {
@@ -405,6 +407,7 @@ export class VmService {
     const tAgentHealthStart = Date.now();
     await this.agentClient.health(vm.id);
     const agentHealthMs = Date.now() - tAgentHealthStart;
+        await this.agentClient.syncTime(vm.id, { unixTimeMs: Date.now() }).catch(() => undefined);
     await this.agentClient.applyAllowlist(vm.id, vm.allowIps, vm.outboundInternet);
     await this.store.update(vm.id, { state: "RUNNING", provisionMode: "boot" });
     await this.activity?.logEvent({

@@ -1,7 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 import { Readable } from "node:stream";
-import type { ExecRequest, NetConfigRequest, RunTsRequest } from "../types/agent.js";
+import type { ExecRequest, NetConfigRequest, RunTsRequest, TimeSyncRequest } from "../types/agent.js";
 import type { ExecRunner, FileService, FirewallManager, NetworkConfigurator } from "../types/interfaces.js";
+import { syncSystemTime } from "../time/timeSync.js";
 
 export interface ApiPluginOptions {
   execRunner: ExecRunner;
@@ -29,6 +30,16 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
   app.post("/net/config", { bodyLimit: BODY_LIMITS.json }, async (request, reply) => {
     const payload = request.body as NetConfigRequest;
     await opts.networkConfigurator.configure(payload);
+    reply.code(204);
+  });
+
+  app.post("/time/sync", { bodyLimit: BODY_LIMITS.json }, async (request, reply) => {
+    const payload = request.body as TimeSyncRequest;
+    if (!payload || typeof (payload as any).unixTimeMs !== "number") {
+      reply.code(400);
+      return { message: "unixTimeMs is required" };
+    }
+    await syncSystemTime(payload.unixTimeMs);
     reply.code(204);
   });
 

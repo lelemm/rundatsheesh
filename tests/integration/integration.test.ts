@@ -286,6 +286,18 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     expect(res.stdout).toContain("nameserver ");
   });
 
+  it("run-ts: system clock is sane (TLS should not fail with NotValidYet)", async () => {
+    const res = await vmRunTs(
+      vmOk,
+      [
+        "const year = new Date().getUTCFullYear();",
+        "console.log(String(year));",
+        "if (year < 2023) Deno.exit(2);"
+      ].join("\n")
+    );
+    expect(res.exitCode).toBe(0);
+  });
+
   it("exec: runs as uid 1000", async () => {
     const idu = await vmExec(vmOk, "id -u");
     expect(idu.stdout.trim()).toBe("1000");

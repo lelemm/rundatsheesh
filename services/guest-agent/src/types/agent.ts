@@ -25,6 +25,13 @@ export interface ExecResult {
   stderr: string;
 }
 
+export interface TimeSyncRequest {
+  /**
+   * Unix time in milliseconds.
+   */
+  unixTimeMs: number;
+}
+
 export interface NetConfigRequest {
   /**
    * Only eth0 is supported for now.
