@@ -2,11 +2,11 @@ import type { IExecuteFunctions, INodeExecutionData, INodeType, INodeTypeDescrip
 import { NodeOperationError } from "n8n-workflow";
 import { runDatsheeshApiRequest } from "./GenericFunctions";
 
-export class RunDatsheesh implements INodeType {
+export class RunDatSeesh implements INodeType {
   description: INodeTypeDescription = {
     displayName: "Run Dat sheesh",
     name: "runDatsheesh",
-    icon: "file:runDatsheesh.svg",
+    icon: "file:logo.png",
     group: ["transform"],
     version: 1,
     subtitle: "={{$parameter.resource + ': ' + $parameter.operation}}",

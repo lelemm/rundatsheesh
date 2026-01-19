@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-run-dat-sheesh",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "n8n community nodes for run-dat-sheesh manager API",
   "license": "MIT",
   "homepage": "https://github.com/your-org/run-dat-sheesh",
@@ -20,7 +20,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run copy-assets",
+    "copy-assets": "mkdir -p dist/nodes/RunDatSeesh dist/nodes/RunDatsheesh && cp nodes/RunDatSeesh/runDatSeesh.svg dist/nodes/RunDatSeesh/ && cp ../logo.png dist/nodes/RunDatSeesh/logo.png && cp ../logo.png dist/nodes/RunDatsheesh/logo.png",
+    "prepack": "npm run build",
     "prepare": "npm run build"
   },
   "devDependencies": {
@@ -33,13 +35,16 @@
     "n8n-core": "^1.0.0",
     "n8n-workflow": "^1.0.0"
   },
+  "engines": {
+    "node": ">=18 <22"
+  },
   "n8n": {
     "n8nNodesApiVersion": 1,
     "credentials": [
-      "dist/credentials/RunDatsheeshApi.credentials.js"
+      "dist/credentials/RunDatSeeshApi.credentials.js"
     ],
     "nodes": [
-      "dist/nodes/RunDatsheesh/RunDatsheesh.node.js"
+      "dist/nodes/RunDatSeesh/RunDatSeesh.node.js"
     ]
   }
 }

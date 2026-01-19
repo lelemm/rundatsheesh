@@ -1,6 +1,6 @@
 import type { IAuthenticateGeneric, ICredentialType, INodeProperties } from "n8n-workflow";
 
-export class RunDatsheeshApi implements ICredentialType {
+export class RunDatSeeshApi implements ICredentialType {
   name = "runDatsheeshApi";
   displayName = "Run Dat sheesh API";
   documentationUrl = "https://github.com/your-org/run-dat-sheesh";
