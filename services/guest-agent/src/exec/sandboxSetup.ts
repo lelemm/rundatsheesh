@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { SANDBOX_ROOT, USER_HOME } from "../config/constants.js";
 
 async function isMountPoint(mountPoint: string): Promise<boolean> {
@@ -41,6 +42,28 @@ async function ensureBindMount(source: string, target: string): Promise<void> {
   }
 }
 
+async function ensureBindMountFile(source: string, target: string): Promise<void> {
+  await ensureDir(path.posix.dirname(target));
+  // mount --bind on a file requires the target file to exist.
+  await fs.open(target, "a").then((f) => f.close());
+  if (await isMountPoint(target)) return;
+  try {
+    await run("/bin/mount", ["--bind", source, target]);
+  } catch {
+    await run("/bin/busybox", ["mount", "--bind", source, target]);
+  }
+}
+
+async function tryBindMountFileIntoSandbox(absoluteHostPath: string): Promise<void> {
+  try {
+    const st = await fs.stat(absoluteHostPath);
+    if (!st.isFile()) return;
+    await ensureBindMountFile(absoluteHostPath, `${SANDBOX_ROOT}${absoluteHostPath}`);
+  } catch {
+    // Best-effort: missing file or mount failure should not prevent agent startup.
+  }
+}
+
 /**
  * Ensure the /exec sandbox is ready:
  * - chroot root at SANDBOX_ROOT exists and contains a minimal toolchain (provided by the image)
@@ -52,6 +75,7 @@ export async function ensureExecSandboxReady(): Promise<void> {
   await ensureDir(`${SANDBOX_ROOT}/proc`);
   await ensureDir(`${SANDBOX_ROOT}/home/user`);
   await ensureDir(`${SANDBOX_ROOT}/workspace`);
+  await ensureDir(`${SANDBOX_ROOT}/etc`);
 
   // Bind mounts make /home/user visible inside the chroot without symlink tricks.
   await ensureBindMount(USER_HOME, `${SANDBOX_ROOT}/home/user`);
@@ -64,5 +88,11 @@ export async function ensureExecSandboxReady(): Promise<void> {
   // Some runtimes (notably Deno on Alpine/musl) rely on /proc for basic introspection
   // (e.g. /proc/self/exe). Bind-mount /proc so jailed commands can run reliably.
   await ensureBindMount("/proc", `${SANDBOX_ROOT}/proc`);
+
+  // Ensure jailed processes can resolve DNS / do hostname lookups.
+  // Without this, `/run-ts` inside the chroot can fail with DNS lookup errors.
+  await tryBindMountFileIntoSandbox("/etc/resolv.conf");
+  await tryBindMountFileIntoSandbox("/etc/hosts");
+  await tryBindMountFileIntoSandbox("/etc/nsswitch.conf");
 }
 

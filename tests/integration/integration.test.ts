@@ -316,6 +316,9 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
       [
         "cd /workspace",
         "rm -rf npm-test && mkdir -p npm-test && cd npm-test",
+        // Ensure any accidental registry access fails fast (and to an allowlisted IP) instead of hanging on dropped packets.
+        // Local file: installs should not require network.
+        "export npm_config_registry=http://172.16.0.1:9 npm_config_fetch_timeout=2000 npm_config_fetch_retries=0 npm_config_fetch_retry_maxtimeout=2000",
         // Keep output visible so failures are diagnosable (Alpine npm has different behavior).
         "npm init -y",
         // Explicit file: install; disable noisy network features (audit/fund/update notifier).
