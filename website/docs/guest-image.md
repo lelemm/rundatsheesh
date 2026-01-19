@@ -65,9 +65,11 @@ Because `exec` runs inside a minimal chroot jail, a small toolchain is available
 ### 5) Deno for `run-ts`
 
 `run-ts` uses **Deno** and executes with restricted permissions:
-- `--allow-read=/workspace`
+- `--allow-read=/workspace` (plus minimal `/etc/*` reads needed for DNS + TLS)
 - `--allow-write=/workspace`
 - optional `--allow-net` if requested (and still subject to firewall allowlist)
+- env vars: when the API request includes `env: ["KEY=value", ...]`, `run-ts` will allow access to only those keys (so `Deno.env.get("KEY")` works)
+- structured return: scripts can call `result.set(value)` / `result.error(err)` and the manager will include `result` / `error` fields in the response JSON
 
 ## Uploading images to the manager
 

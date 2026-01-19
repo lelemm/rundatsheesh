@@ -37,8 +37,8 @@ export interface AgentClient {
     payload: { ip: string; gateway: string; cidr?: number; mac?: string; iface?: string; dns?: string; dnsOnly?: boolean }
   ): Promise<void>;
   syncTime(vmId: string, payload: { unixTimeMs: number }): Promise<void>;
-  exec(vmId: string, payload: VmExecRequest): Promise<{ exitCode: number; stdout: string; stderr: string }>;
-  runTs(vmId: string, payload: VmRunTsRequest): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  exec(vmId: string, payload: VmExecRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }>;
+  runTs(vmId: string, payload: VmRunTsRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }>;
   upload(vmId: string, dest: string, data: Buffer): Promise<void>;
   download(vmId: string, path: string): Promise<Buffer>;
 }

@@ -14,7 +14,7 @@ export class ExecRunnerImpl implements ExecRunner {
 
   async runTs(payload: RunTsRequest): Promise<ExecResult> {
     const cwd = await resolveCwd(payload.path ? path.dirname(payload.path) : undefined);
-    const entry = await resolveEntryPath(payload);
+    const { entry, cleanupPaths, resultPath } = await prepareRunTsEntry(payload);
     const denoBin = "/usr/bin/deno";
 
     const extraEnv = parseEnvArray(payload.env);
@@ -52,36 +52,68 @@ export class ExecRunnerImpl implements ExecRunner {
       },
       timeoutMs: payload.timeoutMs
     })
-      .then((result) => ({
-        exitCode: result.exitCode,
-        stdout: stripAnsi(result.stdout),
-        stderr: stripAnsi(result.stderr)
-      }))
+      .then(async (result) => {
+        const parsed = resultPath ? await readResultFile(resultPath) : undefined;
+        return {
+          exitCode: result.exitCode,
+          stdout: stripAnsi(result.stdout),
+          stderr: stripAnsi(result.stderr),
+          ...(parsed?.result !== undefined ? { result: parsed.result } : {}),
+          ...(parsed?.error !== undefined ? { error: parsed.error } : {})
+        };
+      })
       .finally(async () => {
-      if (payload.code) {
-        // Delete the host-side file (same underlying mount as /workspace).
-        await fs.rm(resolveWorkspacePathToHost(entry), { force: true }).catch(() => undefined);
-      }
+        // Delete any files created to execute this request.
+        for (const p of cleanupPaths) {
+          await fs.rm(resolveWorkspacePathToHost(p), { force: true }).catch(() => undefined);
+        }
+        if (resultPath) {
+          await fs.rm(resolveWorkspacePathToHost(resultPath), { force: true }).catch(() => undefined);
+        }
     });
   }
 }
 
-async function resolveEntryPath(payload: RunTsRequest): Promise<string> {
+async function prepareRunTsEntry(payload: RunTsRequest): Promise<{ entry: string; cleanupPaths: string[]; resultPath?: string }> {
+  // We always execute a wrapper as the entrypoint so a built-in `result` helper is available,
+  // and so we can persist a structured {result,error} payload to a known file.
+  const id = randomUUID();
+  const cleanupPaths: string[] = [];
+  const resultPath = `/workspace/.tmp/run-ts-result-${id}.json`;
+  const wrapperPath = `/workspace/.run-ts-wrapper-${id}.ts`;
+
+  const dirHostWorkspace = resolveWorkspacePathToHost("/workspace");
+  const dirHostTmp = resolveWorkspacePathToHost("/workspace/.tmp");
+  await fs.mkdir(dirHostWorkspace, { recursive: true });
+  await fs.mkdir(dirHostTmp, { recursive: true });
+
+  let targetUrl = "";
   if (payload.path) {
-    return resolveWorkspacePathToChroot(payload.path);
-  }
-  if (!payload.code) {
+    // Import the target module by absolute file URL so its relative imports still resolve against its own location.
+    targetUrl = `file://${resolveWorkspacePathToChroot(payload.path)}`;
+  } else if (payload.code) {
+    // Keep the snippet as its own module so stack traces point to it.
+    const snippetPath = `/workspace/.run-ts-snippet-${id}.ts`;
+    const fullHostPath = path.join(dirHostWorkspace, path.posix.basename(snippetPath));
+    await fs.writeFile(fullHostPath, payload.code, { encoding: "utf-8", mode: 0o644 });
+    await fs.chown(fullHostPath, JAIL_USER_ID, JAIL_GROUP_ID);
+    cleanupPaths.push(snippetPath);
+    targetUrl = `file://${resolveWorkspacePathToChroot(snippetPath)}`;
+  } else {
     throw new Error("path or code is required");
   }
-  // Write the snippet directly under /workspace so relative imports resolve as if executed from /workspace.
-  // (Deno resolves relative module specifiers based on the module file location, not process cwd.)
-  const dirHost = resolveWorkspacePathToHost("/workspace");
-  await fs.mkdir(dirHost, { recursive: true });
-  const filename = `.run-ts-snippet-${randomUUID()}.ts`;
-  const fullHostPath = path.join(dirHost, filename);
-  await fs.writeFile(fullHostPath, payload.code, { encoding: "utf-8", mode: 0o644 });
-  await fs.chown(fullHostPath, JAIL_USER_ID, JAIL_GROUP_ID);
-  return resolveWorkspacePathToChroot(`/workspace/${filename}`);
+
+  const wrapperCode = buildRunTsWrapper({ targetUrl, resultPath });
+  const wrapperHostPath = path.join(dirHostWorkspace, path.posix.basename(wrapperPath));
+  await fs.writeFile(wrapperHostPath, wrapperCode, { encoding: "utf-8", mode: 0o644 });
+  await fs.chown(wrapperHostPath, JAIL_USER_ID, JAIL_GROUP_ID);
+  cleanupPaths.push(wrapperPath);
+
+  return {
+    entry: resolveWorkspacePathToChroot(wrapperPath),
+    cleanupPaths,
+    resultPath
+  };
 }
 
 async function resolveCwd(input?: string): Promise<string> {
@@ -119,6 +151,82 @@ function parseEnvArray(env?: string[]): Record<string, string> {
     out[key] = value;
   }
   return out;
+}
+
+async function readResultFile(resultPath: string): Promise<{ result?: unknown; error?: unknown } | undefined> {
+  try {
+    const text = await fs.readFile(resolveWorkspacePathToHost(resultPath), "utf-8");
+    if (!text) return undefined;
+    const parsed = JSON.parse(text) as any;
+    if (!parsed || typeof parsed !== "object") return undefined;
+    return { result: parsed.result, error: parsed.error };
+  } catch {
+    return undefined;
+  }
+}
+
+function buildRunTsWrapper(input: { targetUrl: string; resultPath: string }): string {
+  // IMPORTANT: This file runs in the guest VM (Deno).
+  // It provides a built-in global `result` helper to capture structured output and errors.
+  // The helper persists to a file so the guest-agent can return it in the API response.
+  return [
+    `const __RESULT_PATH__ = ${JSON.stringify(input.resultPath)};`,
+    `let __result = undefined;`,
+    `let __error = undefined;`,
+    ``,
+    `function __serializeError(e) {`,
+    `  // Preserve plain objects as-is, but normalize Error-like values to {name,message,stack}.`,
+    `  if (e && typeof e === "object") {`,
+    `    const hasErrorShape = ("name" in e) || ("message" in e) || ("stack" in e);`,
+    `    if (hasErrorShape) {`,
+    `      const name = String(e.name ?? "Error");`,
+    `      const message = String(e.message ?? e.toString?.() ?? "");`,
+    `      const stack = typeof e.stack === "string" ? e.stack : undefined;`,
+    `      return { name, message, ...(stack ? { stack } : {}) };`,
+    `    }`,
+    `  }`,
+    `  return e;`,
+    `}`,
+    ``,
+    `function __safeStringify(value) {`,
+    `  const seen = new WeakSet();`,
+    `  return JSON.stringify(value, (_k, v) => {`,
+    `    if (typeof v === "bigint") return v.toString();`,
+    `    if (v && typeof v === "object") {`,
+    `      if (seen.has(v)) return "[Circular]";`,
+    `      seen.add(v);`,
+    `    }`,
+    `    return v;`,
+    `  });`,
+    `}`,
+    ``,
+    `globalThis.result = {`,
+    `  set: (v) => { __result = v; },`,
+    `  error: (e) => { __error = __serializeError(e); },`,
+    `};`,
+    ``,
+    `async function __writeResult() {`,
+    `  try {`,
+    `    const payload = { result: __result, error: __error };`,
+    `    await Deno.writeTextFile(__RESULT_PATH__, __safeStringify(payload));`,
+    `  } catch {`,
+    `    // ignore`,
+    `  }`,
+    `}`,
+    ``,
+    `try {`,
+    `  await import(${JSON.stringify(input.targetUrl)});`,
+    `} catch (e) {`,
+    `  __error = __serializeError(e);`,
+    `  // leave stack in error; set non-zero exit code`,
+    `  if (typeof Deno !== "undefined") Deno.exitCode = 1;`,
+    `} finally {`,
+    `  // If the imported module called result.error(), also exit non-zero.`,
+    `  if (__error !== undefined && typeof Deno !== "undefined" && Deno.exitCode === 0) Deno.exitCode = 1;`,
+    `  await __writeResult();`,
+    `}`,
+    ``
+  ].join("\n");
 }
 
 function stripAnsi(input: string): string {

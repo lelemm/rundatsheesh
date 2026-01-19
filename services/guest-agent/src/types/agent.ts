@@ -23,6 +23,14 @@ export interface ExecResult {
   exitCode: number;
   stdout: string;
   stderr: string;
+  /**
+   * Optional structured result from the executed script (set via global `result.set(...)`).
+   */
+  result?: unknown;
+  /**
+   * Optional structured error from the executed script (set via global `result.error(...)`).
+   */
+  error?: unknown;
 }
 
 export interface TimeSyncRequest {

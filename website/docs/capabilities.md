@@ -7,6 +7,7 @@ title: Capabilities (what the sandbox can do)
 - **MicroVM lifecycle**: create/start/stop/destroy Firecracker microVMs via the manager API.
 - **Command execution**: run shell commands inside the VM as uid/gid **1000** (user `user`).
 - **TypeScript execution**: run TypeScript via **Deno** (`run-ts`), with restricted permissions.
+- **Structured results**: `run-ts` supports returning JSON via `result.set(...)` / `result.error(...)` in addition to stdout/stderr.
 - **Files API**: upload/download **tar.gz** archives, restricted to `/workspace` (symlinks/traversal rejected).
 - **Networking controls**:
   - per-VM firewall allowlist (`allowIps`) + optional `outboundInternet`

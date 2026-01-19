@@ -41,12 +41,12 @@ export class VsockAgentClient implements AgentClient {
     await this.request(vmId, "POST", "/time/sync", payload);
   }
 
-  async exec(vmId: string, payload: VmExecRequest): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  async exec(vmId: string, payload: VmExecRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }> {
     const timeoutMs = typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined;
     return this.request(vmId, "POST", "/exec", payload, { timeoutMs });
   }
 
-  async runTs(vmId: string, payload: VmRunTsRequest): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+  async runTs(vmId: string, payload: VmRunTsRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }> {
     const timeoutMs = typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined;
     return this.request(vmId, "POST", "/run-ts", payload, { timeoutMs });
   }
