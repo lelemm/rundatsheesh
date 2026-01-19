@@ -25,7 +25,7 @@ import {
 
 interface VM {
   id: string
-  status: "running" | "stopped" | "creating"
+  status: "running" | "stopped" | "creating" | "starting" | "stopping" | "error"
   cpu: number
   memMb: number
   allowInternet: boolean

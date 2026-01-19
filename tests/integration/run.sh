@@ -84,9 +84,12 @@ RDS_DATA_DIR="$(mktemp -d)"
 RDS_IMAGES_DIR="$(mktemp -d)"
 # With `--cap-drop ALL`, even root in the container does NOT have CAP_DAC_OVERRIDE,
 # so bind-mounted host directories must be writable by the container's uid/gid via normal permissions.
-# mktemp defaults to 0700; make it writable like /tmp (world-writable + sticky bit).
-chmod 1777 "$RDS_DATA_DIR"
-chmod 1777 "$RDS_IMAGES_DIR"
+# mktemp defaults to 0700; make it world-writable so the container can write.
+#
+# IMPORTANT: do NOT set the sticky bit here (1777). The manager container commonly writes files as uid 0
+# on the host mount, and sticky directories prevent non-owners from cleaning them up, leaving VM folders behind.
+chmod 0777 "$RDS_DATA_DIR"
+chmod 0777 "$RDS_IMAGES_DIR"
 CID=$(docker run -d \
   "${DEV_ARGS[@]}" \
   --read-only \

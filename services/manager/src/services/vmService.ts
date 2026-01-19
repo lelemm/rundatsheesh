@@ -61,12 +61,15 @@ export class VmService {
 
   async list(): Promise<VmPublic[]> {
     const items = await this.store.list();
-    return items.map((vm) => toPublic(vm));
+    // Deleted VMs are tombstoned (for auditing/logging) but should not appear in normal listings.
+    return items.filter((vm) => vm.state !== "DELETED").map((vm) => toPublic(vm));
   }
 
   async get(id: string): Promise<VmPublic | null> {
     const vm = await this.store.get(id);
-    return vm ? toPublic(vm) : null;
+    if (!vm) return null;
+    if (vm.state === "DELETED") return null;
+    return toPublic(vm);
   }
 
   async create(request: VmCreateRequest): Promise<VmPublic> {

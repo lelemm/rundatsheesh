@@ -60,7 +60,7 @@ import { subscribeAdminEvents } from "@/lib/admin-events"
 
 interface VM {
   id: string
-  status: "running" | "stopped" | "creating" | "starting" | "stopping"
+  status: "running" | "stopped" | "creating" | "starting" | "stopping" | "error"
   cpu: number
   memMb: number
   allowInternet: boolean
@@ -102,6 +102,8 @@ export function VMsPanel() {
         ? "running"
         : state === "STOPPED"
           ? "stopped"
+          : state === "ERROR"
+            ? "error"
           : state === "STARTING"
             ? "starting"
             : state === "STOPPING"
@@ -114,7 +116,6 @@ export function VMsPanel() {
       memMb: vm.memMb,
       allowInternet: Boolean(vm.outboundInternet),
       createdAt: vm.createdAt,
-      imageId: vm.imageId,
     }
   }
 
@@ -149,7 +150,7 @@ export function VMsPanel() {
     return subscribeAdminEvents((ev) => {
       if (ev.entityType !== "vm") return
       if (!ev.entityId) return
-      if (ev.type === "vm.started" || ev.type === "vm.stopped") {
+      if (ev.type === "vm.started" || ev.type === "vm.stopped" || ev.type === "vm.deleted" || ev.type === "vm.created") {
         setPendingByVmId((p) => {
           if (!p[ev.entityId!]) return p
           const next = { ...p }
@@ -159,7 +160,7 @@ export function VMsPanel() {
         void refresh()
       }
     })
-  }, [vms])
+  }, [])
 
   const handleCreateVM = async () => {
     const allowIps = newVM.allowInternet ? ["0.0.0.0/0"] : []
@@ -180,8 +181,16 @@ export function VMsPanel() {
 
   const handleDeleteVM = async (id: string) => {
     await apiRequestJson("DELETE", `/v1/vms/${id}`)
+    // Optimistically remove locally; the backend list is eventually consistent.
+    setVMs((prev) => prev.filter((v) => v.id !== id))
     if (selectedVM?.id === id) setSelectedVM(null)
     setVmToDelete(null)
+    setPendingByVmId((p) => {
+      if (!p[id]) return p
+      const next = { ...p }
+      delete next[id]
+      return next
+    })
     await refresh()
   }
 
@@ -210,6 +219,8 @@ export function VMsPanel() {
       case "stopping":
       case "creating":
         return "bg-warning animate-pulse"
+      case "error":
+        return "bg-destructive"
     }
   }
 
@@ -243,6 +254,12 @@ export function VMsPanel() {
         return (
           <Badge variant="outline" className="border-warning/50 text-warning">
             Creating
+          </Badge>
+        )
+      case "error":
+        return (
+          <Badge variant="outline" className="border-destructive/50 text-destructive">
+            Error
           </Badge>
         )
     }
