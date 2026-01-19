@@ -9,6 +9,7 @@ n8n community nodes for the **run-dat-sheesh** Manager API.
 
 ## Supported Manager endpoints
 
+- `GET /v1/images`
 - `GET /v1/vms`
 - `GET /v1/vms/:id`
 - `POST /v1/vms`

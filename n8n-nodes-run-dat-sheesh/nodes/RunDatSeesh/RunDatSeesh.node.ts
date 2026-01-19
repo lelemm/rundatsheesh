@@ -30,11 +30,25 @@ export class RunDatsheesh implements INodeType {
         type: "options",
         noDataExpression: true,
         options: [
+          { name: "Images", value: "images" },
           { name: "Files", value: "files" },
           { name: "Snapshots", value: "snapshots" },
           { name: "VMs", value: "vms" }
         ],
         default: "vms"
+      },
+
+      // Images
+      {
+        displayName: "Operation",
+        name: "operationImages",
+        type: "options",
+        noDataExpression: true,
+        displayOptions: { show: { resource: ["images"] } },
+        options: [
+          { name: "List Images", value: "list", action: "List images" }
+        ],
+        default: "list"
       },
 
       // Snapshots
@@ -138,6 +152,22 @@ export class RunDatsheesh implements INodeType {
         type: "string",
         default: "",
         description: "Optional snapshot id to restore from.",
+        displayOptions: { show: { resource: ["vms"], operationVms: ["create"] } }
+      },
+      {
+        displayName: "Image ID",
+        name: "imageId",
+        type: "string",
+        default: "",
+        description: "Optional guest image id (defaults to the configured default image).",
+        displayOptions: { show: { resource: ["vms"], operationVms: ["create"] } }
+      },
+      {
+        displayName: "Disk Size (MiB)",
+        name: "diskSizeMb",
+        type: "number",
+        default: 0,
+        description: "Optional disk size in MiB. Must be >= base rootfs size. Set 0 to omit.",
         displayOptions: { show: { resource: ["vms"], operationVms: ["create"] } }
       },
 
@@ -287,6 +317,18 @@ export class RunDatsheesh implements INodeType {
     for (let i = 0; i < items.length; i++) {
       const resource = this.getNodeParameter("resource", i) as string;
 
+      if (resource === "images") {
+        const operation = this.getNodeParameter("operationImages", i) as string;
+
+        if (operation === "list") {
+          const data = await runDatsheeshApiRequest.call(this, "GET", "/v1/images");
+          returnData.push(...this.helpers.returnJsonArray(data));
+          continue;
+        }
+
+        throw new NodeOperationError(this.getNode(), `Unsupported images operation: ${operation}`, { itemIndex: i });
+      }
+
       if (resource === "snapshots") {
         const operation = this.getNodeParameter("operationSnapshots", i) as string;
 
@@ -369,14 +411,25 @@ export class RunDatsheesh implements INodeType {
         const allowIpsRaw = this.getNodeParameter("allowIps", i) as string;
         const outboundInternet = this.getNodeParameter("outboundInternet", i) as boolean;
         const snapshotId = (this.getNodeParameter("snapshotId", i) as string).trim();
+        const imageId = (this.getNodeParameter("imageId", i) as string).trim();
+        const diskSizeMbRaw = this.getNodeParameter("diskSizeMb", i) as number;
+        const diskSizeMb = diskSizeMbRaw && diskSizeMbRaw > 0 ? diskSizeMbRaw : undefined;
 
         const allowIps = allowIpsRaw
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean);
 
+        if (!allowIps.length) {
+          throw new NodeOperationError(this.getNode(), "Allowed IPs (CIDR) must contain at least one entry", {
+            itemIndex: i
+          });
+        }
+
         const body: any = { cpu, memMb, allowIps, outboundInternet };
         if (snapshotId) body.snapshotId = snapshotId;
+        if (imageId) body.imageId = imageId;
+        if (diskSizeMb !== undefined) body.diskSizeMb = diskSizeMb;
 
         const data = await runDatsheeshApiRequest.call(this, "POST", "/v1/vms", { body });
         returnData.push({ json: data });
