@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/auth-context"
 interface SidebarProps {
   currentView: View
   onViewChange: (view: View) => void
+  confirmExternalNavigation?: () => boolean
 }
 
 const navItems = [
@@ -21,7 +22,7 @@ const navItems = [
   { id: "webhooks" as View, label: "Webhooks", icon: Webhook },
 ]
 
-export function Sidebar({ currentView, onViewChange }: SidebarProps) {
+export function Sidebar({ currentView, onViewChange, confirmExternalNavigation }: SidebarProps) {
   const { user, logout } = useAuth()
   return (
     <div className="w-64 h-full bg-sidebar border-r border-sidebar-border flex flex-col">
@@ -84,7 +85,10 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
               variant="ghost"
               size="sm"
               className="mt-2 w-full justify-start text-muted-foreground hover:text-foreground"
-              onClick={logout}
+              onClick={() => {
+                if (confirmExternalNavigation && !confirmExternalNavigation()) return
+                logout()
+              }}
             >
               Sign out
             </Button>

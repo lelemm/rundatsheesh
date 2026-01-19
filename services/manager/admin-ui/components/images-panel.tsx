@@ -96,7 +96,7 @@ function FilePickButton(props: {
   )
 }
 
-export function ImagesPanel() {
+export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => void }) {
   const [items, setItems] = useState<GuestImage[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -111,6 +111,20 @@ export function ImagesPanel() {
   const [createRootfsProgress, setCreateRootfsProgress] = useState<UploadProgress | null>(null)
   const [uploadPctByKey, setUploadPctByKey] = useState<Record<string, number | null>>({})
   const [deleteTarget, setDeleteTarget] = useState<GuestImage | null>(null)
+
+  const isUploading = useMemo(() => {
+    if (isCreating) return true
+    if (createKernelProgress !== null) return true
+    if (createRootfsProgress !== null) return true
+    return Object.values(uploadPctByKey).some((v) => v !== null && v !== undefined)
+  }, [createKernelProgress, createRootfsProgress, isCreating, uploadPctByKey])
+
+  // Notify parent shell so it can block navigation during uploads.
+  // (Also ensures the flag is reset on unmount.)
+  useEffect(() => {
+    props.onUploadBusyChange?.(isUploading)
+    return () => props.onUploadBusyChange?.(false)
+  }, [isUploading, props.onUploadBusyChange])
 
   const refresh = async () => {
     setLoading(true)
