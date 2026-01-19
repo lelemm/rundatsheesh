@@ -130,6 +130,20 @@ async function vmExec(vmId: string, cmd: string): Promise<ExecResult> {
 async function vmRunTs(vmId: string, code: string): Promise<ExecResult> {
   const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/run-ts`, { code });
   expect(status).toBe(200);
+  if (json.exitCode !== 0) {
+    // eslint-disable-next-line no-console
+    console.error("[it] run-ts nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr });
+  }
+  return json;
+}
+
+async function vmRunTsWithEnv(vmId: string, code: string, env: string[]): Promise<ExecResult> {
+  const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/run-ts`, { code, env });
+  expect(status).toBe(200);
+  if (json.exitCode !== 0) {
+    // eslint-disable-next-line no-console
+    console.error("[it] run-ts(env) nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr });
+  }
   return json;
 }
 
@@ -241,6 +255,22 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     );
     expect(allow.exitCode).toBe(0);
     expect(allow.stdout.trim()).toBe("ok");
+  });
+
+  it("run-ts: env array is available via Deno.env.get()", async () => {
+    const key = "IT_SECRET";
+    const value = `hello-${Date.now()}`;
+    const res = await vmRunTsWithEnv(
+      vmOk,
+      [
+        `const v = Deno.env.get(${JSON.stringify(key)});`,
+        `if (!v) { console.error("missing"); Deno.exit(2); }`,
+        "console.log(v);"
+      ].join("\n"),
+      [`${key}=${value}`]
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout.trim()).toBe(value);
   });
 
   it("exec: runs as uid 1000", async () => {

@@ -17,12 +17,19 @@ export class ExecRunnerImpl implements ExecRunner {
     const entry = await resolveEntryPath(payload);
     const denoBin = "/usr/bin/deno";
 
+    const extraEnv = parseEnvArray(payload.env);
+    const allowEnvNames = Object.keys(extraEnv);
+
     const args = [
       "run",
       "--quiet",
       "--allow-read=/workspace",
       "--allow-write=/workspace"
     ];
+    if (allowEnvNames.length) {
+      // Allow access only to the explicitly provided env vars.
+      args.push(`--allow-env=${allowEnvNames.join(",")}`);
+    }
     if (payload.allowNet) {
       args.push("--allow-net");
     }
@@ -33,7 +40,6 @@ export class ExecRunnerImpl implements ExecRunner {
 
     // NOTE: run-ts is now executed inside the same chroot jail as /exec.
     const cmd = `${shellQuoteSingle(denoBin)} ${args.map((a) => shellQuoteSingle(a)).join(" ")}`;
-    const extraEnv = parseEnvArray(payload.env);
     return runInJailShell(cmd, {
       cwdInWorkspace: cwd,
       env: {
