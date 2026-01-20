@@ -21,6 +21,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -34,13 +38,12 @@ jobs:
 
       - name: Build (GitHub Pages)
         env:
-          # GitHub Pages project sites are served under "/<repo>/"
-          GH_BASE_URL: "/${{ github.event.repository.name }}/"
+          # Uses the correct base path for both:
+          # - project pages: "/<repo>/"
+          # - custom domains: "/"
+          GH_BASE_URL: ${{ steps.pages.outputs.base_path }}
         run: npm run build:gh
         working-directory: website
-
-      - name: Configure Pages
-        uses: actions/configure-pages@v5
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
