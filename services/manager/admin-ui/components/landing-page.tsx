@@ -238,10 +238,14 @@ docker compose up -d
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-balance mb-6">
               Run <span className="text-primary">Untrusted Code</span> on Your Infrastructure
             </h1>
-            <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-10 text-pretty">
+            <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-6 text-pretty">
               A self-hosted REST API to spin up Firecracker microVMs, execute LLM-generated code in isolation, and
               manage snapshots. Deploy on your own servers with full control.
             </p>
+            <div className="max-w-2xl mx-auto mb-8 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+              <span className="font-semibold">Alpha warning:</span> This app is in an early alpha state and may be very
+              unstable. Use with caution.
+            </div>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-8">
               <Link href="https://github.com/lelemm/rundatsheesh">
                 <Button size="lg" className="gap-2 h-12 px-6">
