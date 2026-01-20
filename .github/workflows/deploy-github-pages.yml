@@ -3,6 +3,11 @@ name: Deploy website to GitHub Pages
 on:
   push:
     branches: [main]
+    paths:
+      - "services/manager/admin-ui/app/page.tsx"
+      - "services/manager/admin-ui/components/landing-page.tsx"
+      - "services/manager/admin-ui/**/*.css"
+      - "website/**"
   workflow_dispatch: {}
 
 permissions:
@@ -30,25 +35,44 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: website/package-lock.json
+          cache-dependency-path: |
+            services/manager/admin-ui/package-lock.json
+            website/package-lock.json
 
-      - name: Install
+      - name: Install (landing UI)
+        run: npm ci
+        working-directory: services/manager/admin-ui
+
+      - name: Build (landing UI)
+        env:
+          NEXT_PUBLIC_RDS_SITE_MODE: marketing
+          # Support both project pages ("/<repo>") and custom domains ("/")
+          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: npm run build
+        working-directory: services/manager/admin-ui
+
+      - name: Install (docs)
         run: npm ci
         working-directory: website
 
-      - name: Build (GitHub Pages)
+      - name: Build (docs)
         env:
-          # Uses the correct base path for both:
-          # - project pages: "/<repo>/"
-          # - custom domains: "/"
-          GH_BASE_URL: ${{ steps.pages.outputs.base_path }}
-        run: npm run build:gh
+          # Support both project pages ("/<repo>") and custom domains ("/")
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+        run: npm run build:pages
         working-directory: website
+
+      - name: Assemble site
+        run: |
+          rm -rf dist-pages
+          mkdir -p dist-pages/docs
+          cp -a services/manager/admin-ui/out/. dist-pages/
+          cp -a website/build-pages/. dist-pages/docs/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: website/build-gh
+          path: dist-pages
 
   deploy:
     needs: build
