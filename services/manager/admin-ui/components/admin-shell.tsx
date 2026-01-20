@@ -5,14 +5,13 @@ import { Sidebar } from "./sidebar"
 import { Dashboard } from "./dashboard"
 import { VMsPanel } from "./vms-panel"
 import { SnapshotsPanel } from "./snapshots-panel"
-import { TemplatesPanel } from "./templates-panel"
 import { ApiKeysPanel } from "./api-keys-panel"
 import { ImagesPanel } from "./images-panel"
 import { WebhooksPanel } from "./webhooks-panel"
 import { toast } from "@/hooks/use-toast"
 import { subscribeAdminEvents, useAdminEventsConnection } from "@/lib/admin-events"
 
-export type View = "dashboard" | "vms" | "snapshots" | "templates" | "images" | "apiKeys" | "webhooks"
+export type View = "dashboard" | "vms" | "snapshots" | "images" | "apiKeys" | "webhooks"
 
 export function AdminShell() {
   const [currentView, setCurrentView] = useState<View>("dashboard")
@@ -58,7 +57,6 @@ export function AdminShell() {
         {currentView === "dashboard" && <Dashboard onNavigate={navigateToView} />}
         {currentView === "vms" && <VMsPanel />}
         {currentView === "snapshots" && <SnapshotsPanel />}
-        {currentView === "templates" && <TemplatesPanel />}
         {currentView === "images" && <ImagesPanel onUploadBusyChange={setImagesUploadBusy} />}
         {currentView === "apiKeys" && <ApiKeysPanel />}
         {currentView === "webhooks" && <WebhooksPanel />}

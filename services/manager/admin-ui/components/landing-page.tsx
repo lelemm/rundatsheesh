@@ -210,9 +210,6 @@ docker compose up -d
               </Link>
             </div>
             <div className="flex items-center gap-3">
-              <Link href="/login">
-                <Button variant="ghost">Console</Button>
-              </Link>
               <Link href="https://github.com/lelemm/rundatsheesh">
                 <Button className="gap-2">
                   <Github className="w-4 h-4" /> Star on GitHub
@@ -364,9 +361,9 @@ docker compose up -d
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
                 <Box className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="font-semibold text-lg mb-2">Templates</h3>
+              <h3 className="font-semibold text-lg mb-2">Images API</h3>
               <p className="text-muted-foreground text-sm">
-                Pre-built templates for Python, Node.js, Rust, Go, and more. Or create your own via API.
+                Upload custom kernels and root filesystems as images, then pick an imageId when creating VMs.
               </p>
             </div>
           </div>

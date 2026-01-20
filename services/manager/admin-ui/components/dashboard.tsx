@@ -1,7 +1,7 @@
 "use client"
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Server, Camera, Layers, Activity, Cpu, HardDrive } from "lucide-react"
+import { Server, Camera, Activity, Cpu, HardDrive } from "lucide-react"
 import type { View } from "./admin-shell"
 import { useEffect, useMemo, useState } from "react"
 import { apiGetJson } from "@/lib/api"
@@ -98,13 +98,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         icon: Camera,
         change: vmSnaps !== null && templates !== null ? `${vmSnaps} VM, ${templates} template` : "",
         view: "snapshots" as View,
-      },
-      {
-        label: "Templates",
-        value: templates?.toString() ?? "—",
-        icon: Layers,
-        change: templates !== null ? "Stored templates" : "",
-        view: "templates" as View,
       },
       { label: "CPU Usage", value: formatPct(cpuUsage), icon: Cpu, change: "Across host", view: undefined },
     ]

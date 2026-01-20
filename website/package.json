@@ -6,10 +6,13 @@
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
     "build": "docusaurus build",
+    "build:embedded": "docusaurus build",
+    "build:gh": "docusaurus build --config docusaurus.gh.config.ts --out-dir build-gh",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
     "serve": "docusaurus serve",
+    "serve:gh": "docusaurus serve --config docusaurus.gh.config.ts --dir build-gh",
     "write-translations": "docusaurus write-translations",
     "write-heading-ids": "docusaurus write-heading-ids",
     "typecheck": "tsc"

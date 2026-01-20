@@ -996,10 +996,15 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
           200: {
             type: "object",
             required: ["exitCode", "stdout", "stderr"],
+            additionalProperties: true,
             properties: {
               exitCode: { type: "number", description: "Program exit code" },
               stdout: { type: "string", description: "UTF-8 stdout" },
-              stderr: { type: "string", description: "UTF-8 stderr" }
+              stderr: { type: "string", description: "UTF-8 stderr" },
+              // Optional structured output captured inside the VM via global `result.set(...)`.
+              result: { type: "object", additionalProperties: true, description: "Structured result payload (if set)" },
+              // Optional structured error captured inside the VM via global `result.error(...)`.
+              error: { type: "object", additionalProperties: true, description: "Structured error payload (if set)" }
             },
             examples: [{ exitCode: 0, stdout: "4\n", stderr: "" }]
           },

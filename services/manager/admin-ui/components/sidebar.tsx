@@ -2,7 +2,7 @@
 
 import { cn } from "@/lib/utils"
 import type { View } from "./admin-shell"
-import { LayoutDashboard, Server, Camera, Layers, KeyRound, HardDrive, BookOpen, Webhook } from "lucide-react"
+import { LayoutDashboard, Server, Camera, KeyRound, HardDrive, BookOpen, Webhook } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useAuth } from "@/lib/auth-context"
 
@@ -16,7 +16,6 @@ const navItems = [
   { id: "dashboard" as View, label: "Dashboard", icon: LayoutDashboard },
   { id: "vms" as View, label: "Virtual Machines", icon: Server },
   { id: "snapshots" as View, label: "Snapshots", icon: Camera },
-  { id: "templates" as View, label: "Templates", icon: Layers },
   { id: "images" as View, label: "Images", icon: HardDrive },
   { id: "apiKeys" as View, label: "API Keys", icon: KeyRound },
   { id: "webhooks" as View, label: "Webhooks", icon: Webhook },
