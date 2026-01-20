@@ -29,6 +29,8 @@ jobs:
       - name: Configure Pages
         id: pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -47,7 +49,7 @@ jobs:
         env:
           NEXT_PUBLIC_RDS_SITE_MODE: marketing
           # Support both project pages ("/<repo>") and custom domains ("/")
-          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          NEXT_PUBLIC_BASE_PATH: ${{ steps.pages.outputs.base_path || '/' }}
         run: npm run build
         working-directory: services/manager/admin-ui
 
@@ -58,7 +60,7 @@ jobs:
       - name: Build (docs)
         env:
           # Support both project pages ("/<repo>") and custom domains ("/")
-          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          PAGES_BASE_PATH: ${{ steps.pages.outputs.base_path || '/' }}
         run: npm run build:pages
         working-directory: website
 
