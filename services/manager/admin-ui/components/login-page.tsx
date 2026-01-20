@@ -43,11 +43,7 @@ export function LoginPage() {
       <div className="flex-1 flex items-center justify-center px-4 py-12">
         <Card className="w-full max-w-md bg-card border-border">
           <CardHeader className="text-center">
-            <img
-              src="/logo.png"
-              alt="run dat sheesh"
-              className="w-14 h-14 rounded-xl object-cover mx-auto mb-2"
-            />
+            <img src="/logo.png" alt="run dat sheesh" className="w-14 h-14 rounded-xl object-cover mx-auto mb-2" />
             <CardTitle className="text-2xl">Welcome back</CardTitle>
             <CardDescription>Sign in to access the admin console</CardDescription>
           </CardHeader>

@@ -4,27 +4,99 @@
  * work well for content-centric websites.
  */
 
-/* You can override the default Infima variables here. */
+/* Match the admin-ui (shadcn/Tailwind) design tokens so docs feel like the same product. */
 :root {
-  --ifm-color-primary: #2e8555;
-  --ifm-color-primary-dark: #29784c;
-  --ifm-color-primary-darker: #277148;
-  --ifm-color-primary-darkest: #205d3b;
-  --ifm-color-primary-light: #33925d;
-  --ifm-color-primary-lighter: #359962;
-  --ifm-color-primary-lightest: #3cad6e;
+  /* shadcn-style tokens (copied from services/manager/admin-ui/styles/globals.css) */
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --radius: 0.625rem;
+
+  /* Infima mappings */
+  --ifm-background-color: var(--background);
+  --ifm-font-color-base: var(--foreground);
+  --ifm-color-emphasis-0: var(--background);
+  --ifm-color-emphasis-100: color-mix(in oklab, var(--muted) 80%, var(--background));
+  --ifm-color-emphasis-200: var(--border);
+  --ifm-color-emphasis-300: color-mix(in oklab, var(--border) 85%, var(--foreground));
+  --ifm-color-emphasis-700: var(--muted-foreground);
+
+  --ifm-color-primary: var(--primary);
+  --ifm-color-primary-dark: color-mix(in oklab, var(--primary) 90%, black);
+  --ifm-color-primary-darker: color-mix(in oklab, var(--primary) 80%, black);
+  --ifm-color-primary-darkest: color-mix(in oklab, var(--primary) 65%, black);
+  --ifm-color-primary-light: color-mix(in oklab, var(--primary) 90%, white);
+  --ifm-color-primary-lighter: color-mix(in oklab, var(--primary) 80%, white);
+  --ifm-color-primary-lightest: color-mix(in oklab, var(--primary) 65%, white);
+
+  --ifm-link-color: var(--primary);
+  --ifm-navbar-background-color: color-mix(in oklab, var(--background) 96%, black);
+  --ifm-footer-background-color: color-mix(in oklab, var(--background) 92%, black);
+  --ifm-card-background-color: var(--card);
+  --ifm-card-border-radius: var(--radius);
+  --ifm-global-radius: var(--radius);
+
   --ifm-code-font-size: 95%;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+  --ifm-code-background: color-mix(in oklab, var(--muted) 80%, var(--background));
+  --docusaurus-highlighted-code-line-bg: color-mix(in oklab, var(--muted) 70%, black);
 }
 
 /* For readability concerns, you should choose a lighter palette in dark mode. */
 [data-theme='dark'] {
-  --ifm-color-primary: #25c2a0;
-  --ifm-color-primary-dark: #21af90;
-  --ifm-color-primary-darker: #1fa588;
-  --ifm-color-primary-darkest: #1a8870;
-  --ifm-color-primary-light: #29d5b0;
-  --ifm-color-primary-lighter: #32d8b4;
-  --ifm-color-primary-lightest: #4fddbf;
-  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.145 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.145 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --border: oklch(0.269 0 0);
+  --input: oklch(0.269 0 0);
+  --ring: oklch(0.439 0 0);
+
+  --ifm-background-color: var(--background);
+  --ifm-font-color-base: var(--foreground);
+  --ifm-color-emphasis-0: var(--background);
+  --ifm-color-emphasis-100: color-mix(in oklab, var(--muted) 85%, var(--background));
+  --ifm-color-emphasis-200: var(--border);
+  --ifm-color-emphasis-300: color-mix(in oklab, var(--border) 85%, var(--foreground));
+  --ifm-color-emphasis-700: var(--muted-foreground);
+
+  --ifm-color-primary: var(--primary);
+  --ifm-color-primary-dark: color-mix(in oklab, var(--primary) 90%, black);
+  --ifm-color-primary-darker: color-mix(in oklab, var(--primary) 80%, black);
+  --ifm-color-primary-darkest: color-mix(in oklab, var(--primary) 65%, black);
+  --ifm-color-primary-light: color-mix(in oklab, var(--primary) 90%, white);
+  --ifm-color-primary-lighter: color-mix(in oklab, var(--primary) 80%, white);
+  --ifm-color-primary-lightest: color-mix(in oklab, var(--primary) 65%, white);
+
+  --ifm-link-color: var(--primary);
+  --ifm-navbar-background-color: color-mix(in oklab, var(--background) 92%, white);
+  --ifm-footer-background-color: color-mix(in oklab, var(--background) 86%, white);
+  --ifm-card-background-color: var(--card);
+
+  --ifm-code-background: color-mix(in oklab, var(--muted) 85%, var(--background));
+  --docusaurus-highlighted-code-line-bg: color-mix(in oklab, var(--muted) 70%, white);
 }

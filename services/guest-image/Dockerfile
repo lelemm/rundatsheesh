@@ -86,7 +86,11 @@ RUN set -eux; \
   # Build ext4 from directory tree, then shrink it to the minimum size so we don't ship empty space.
   # The resulting image can still be grown per-VM (offline) by the manager when provisioning.
   truncate -s 1G /rootfs.ext4; \
-  mke2fs -t ext4 -F -d /rootfs /rootfs.ext4; \
+  # NOTE: Some e2fsprogs builds have been observed to fail during `-d` population with:
+  #   "__populate_fs: Extent block checksum does not match extent block while writing file ..."
+  # Disabling metadata checksums avoids that codepath and is still compatible with our kernel (5.10)
+  # and offline resize workflow.
+  mke2fs -t ext4 -F -O ^metadata_csum,^metadata_csum_seed,^orphan_file -d /rootfs /rootfs.ext4; \
   e2fsck -pf /rootfs.ext4 || true; \
   resize2fs -M /rootfs.ext4; \
   e2fsck -pf /rootfs.ext4 || true; \

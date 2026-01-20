@@ -14,6 +14,15 @@ export function shellQuoteSingle(str: string): string {
 }
 
 export function buildJailEnv(extra?: Record<string, string>) {
+  // Ensure Node runs without JIT inside the jail to avoid sporadic V8/Turbofan crashes
+  // observed in some environments (notably during heavier JS workloads like `npm install`).
+  //
+  // If the caller provides NODE_OPTIONS, we still prepend `--jitless` so it can't be
+  // accidentally dropped.
+  const extraNodeOptions = extra?.NODE_OPTIONS;
+  const forcedNodeOptions = extraNodeOptions ? `--jitless ${extraNodeOptions}` : "--jitless";
+  const { NODE_OPTIONS: _ignored, ...restExtra } = extra ?? {};
+
   // Do NOT inherit the guest-agent process env to avoid leaking internals.
   // Provide a minimal, predictable environment inside the chroot.
   return {
@@ -27,7 +36,8 @@ export function buildJailEnv(extra?: Record<string, string>) {
     SHELL: "/bin/sh",
     LANG: "C.UTF-8",
     TMPDIR: "/workspace/.tmp",
-    ...extra
+    ...restExtra,
+    NODE_OPTIONS: forcedNodeOptions
   };
 }
 

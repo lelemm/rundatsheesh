@@ -73,6 +73,10 @@ require_dep node || exit 1
 
 compute_dev_args
 
+# Best-effort cleanup from prior interrupted runs.
+# This prefix is used by the vitest suite itself (see integration.test.ts).
+rm -rf /tmp/run-dat-sheesh-it-* >/dev/null 2>&1 || true
+
 echo "Building guest artifacts (kernel + rootfs)..."
 make -C "$ROOT_DIR" guest-images
 
@@ -80,8 +84,9 @@ echo "Building manager docker image..."
 docker build --progress=plain -f "$ROOT_DIR/services/manager/Dockerfile" -t run-dat-sheesh-manager "$ROOT_DIR"
 
 echo "Starting manager container..."
-RDS_DATA_DIR="$(mktemp -d)"
-RDS_IMAGES_DIR="$(mktemp -d)"
+# Use a stable prefix so we can identify and clean these up reliably.
+RDS_DATA_DIR="$(mktemp -d -t run-dat-sheesh-it-data-XXXXXX)"
+RDS_IMAGES_DIR="$(mktemp -d -t run-dat-sheesh-it-images-XXXXXX)"
 # With `--cap-drop ALL`, even root in the container does NOT have CAP_DAC_OVERRIDE,
 # so bind-mounted host directories must be writable by the container's uid/gid via normal permissions.
 # mktemp defaults to 0700; make it world-writable so the container can write.
@@ -131,13 +136,22 @@ FAILED=0
 cleanup() {
   if [ "${FAILED:-0}" -ne 0 ]; then
     echo "=== manager logs (failure) ==="
-    docker logs "$CID" || true
+    docker logs "${CID:-}" || true
   fi
-  docker stop "$CID" >/dev/null 2>&1 || true
-  docker rm -f "$CID" >/dev/null 2>&1 || true
-  rm -rf "$RDS_DATA_DIR" >/dev/null 2>&1 || true
-  rm -rf "$RDS_IMAGES_DIR" >/dev/null 2>&1 || true
+  if [ -n "${CID:-}" ]; then
+    docker stop "$CID" >/dev/null 2>&1 || true
+    docker rm -f "$CID" >/dev/null 2>&1 || true
+  fi
+  rm -rf "${RDS_DATA_DIR:-}" >/dev/null 2>&1 || true
+  rm -rf "${RDS_IMAGES_DIR:-}" >/dev/null 2>&1 || true
 }
+on_signal() {
+  FAILED=1
+  cleanup
+  exit 130
+}
+trap on_signal INT
+trap on_signal TERM
 trap cleanup EXIT
 
 echo "Waiting for manager..."

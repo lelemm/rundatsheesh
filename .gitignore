@@ -7,7 +7,8 @@ services/guest-image/dist/
 services/manager/run-data/
 services/manager/db/
 services/manager/public/admin/
-website/build-gh/
+website/build-pages/
+dist-pages/
 *.log
 npm-debug.log*
 pnpm-debug.log*

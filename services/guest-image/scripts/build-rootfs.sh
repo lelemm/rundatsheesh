@@ -114,6 +114,16 @@ fi
 # TLS CA bundle for https remotes
 stage_file_into_user_chroot /etc/ssl/certs/ca-certificates.crt
 
+# Some libcurl builds look for /etc/ssl/cert.pem (Alpine-style). Provide it inside the sandbox.
+if [ -f "$SANDBOX_ROOT/etc/ssl/certs/ca-certificates.crt" ]; then
+  ln -sfn /etc/ssl/certs/ca-certificates.crt "$SANDBOX_ROOT/etc/ssl/cert.pem"
+fi
+
+# Also provide /etc/ssl/cert.pem in the main rootfs for non-chrooted tooling.
+if [ -f /etc/ssl/certs/ca-certificates.crt ]; then
+  ln -sfn /etc/ssl/certs/ca-certificates.crt /etc/ssl/cert.pem
+fi
+
 # Stage shared libs needed by git + its helper binaries into sandbox so the chroot can run them.
 stage_ldd_deps_into_user_chroot /usr/bin/git
 

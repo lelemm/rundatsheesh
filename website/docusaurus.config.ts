@@ -63,7 +63,7 @@ const config: Config = {
       title: "run-dat-sheesh",
       logo: {
         alt: "run-dat-sheesh",
-        src: "img/logo.svg"
+        src: "img/logo.png"
       },
       items: [
         {

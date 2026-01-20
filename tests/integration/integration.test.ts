@@ -161,6 +161,17 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   let sdkUploadBuf: Uint8Array | null = null;
   let npmPkgUploadBuf: Uint8Array | null = null;
 
+  const cleanupTmpDir = () => {
+    // Best-effort: keep /tmp clean even when tests fail.
+    try {
+      if (tmpDir && tmpDir.startsWith(os.tmpdir())) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } catch {
+      // ignore
+    }
+  };
+
   beforeAll(async () => {
     await waitForManager();
     // eslint-disable-next-line no-console
@@ -170,6 +181,17 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     vmOk = (await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true })).id;
 
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "run-dat-sheesh-it-"));
+    // Backstop cleanup for abrupt exits (SIGINT, etc). Vitest should run afterAll, but don't rely on it.
+    process.once("exit", cleanupTmpDir);
+    process.once("SIGINT", () => {
+      cleanupTmpDir();
+      process.exit(130);
+    });
+    process.once("SIGTERM", () => {
+      cleanupTmpDir();
+      process.exit(143);
+    });
+
     const helloPath = path.join(tmpDir, "hello.txt");
     fs.writeFileSync(helloPath, "hello run-dat-sheesh", "utf-8");
     const uploadTar = path.join(tmpDir, "upload.tar.gz");
@@ -206,8 +228,12 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   });
 
   afterAll(async () => {
-    if (vmDeny) await deleteVm(vmDeny);
-    if (vmOk) await deleteVm(vmOk);
+    try {
+      if (vmDeny) await deleteVm(vmDeny);
+      if (vmOk) await deleteVm(vmOk);
+    } finally {
+      cleanupTmpDir();
+    }
   });
 
   it("allowIps: denies non-allowlisted destination", async () => {

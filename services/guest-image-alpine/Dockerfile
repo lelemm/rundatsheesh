@@ -113,9 +113,23 @@ RUN set -eux; \
       mkdir -p "/rootfs/opt/sandbox${execPath}"; \
       cp -a "/rootfs${execPath}/." "/rootfs/opt/sandbox${execPath}/"; \
     fi; \
+    if [ -d /rootfs/usr/share/git-core ]; then \
+      mkdir -p /rootfs/opt/sandbox/usr/share/git-core; \
+      cp -a /rootfs/usr/share/git-core/. /rootfs/opt/sandbox/usr/share/git-core/; \
+    fi; \
     if [ -f /rootfs/etc/ssl/certs/ca-certificates.crt ]; then \
       mkdir -p /rootfs/opt/sandbox/etc/ssl/certs; \
       cp -a /rootfs/etc/ssl/certs/ca-certificates.crt /rootfs/opt/sandbox/etc/ssl/certs/ca-certificates.crt; \
+    fi; \
+    # Some libcurl builds look for /etc/ssl/cert.pem (Alpine-style). Provide it inside the sandbox.
+    if [ -f /rootfs/opt/sandbox/etc/ssl/certs/ca-certificates.crt ]; then \
+      mkdir -p /rootfs/opt/sandbox/etc/ssl; \
+      ln -sfn /etc/ssl/certs/ca-certificates.crt /rootfs/opt/sandbox/etc/ssl/cert.pem; \
+    fi; \
+    # Also provide it in the main rootfs for non-chrooted tooling.
+    if [ -f /rootfs/etc/ssl/certs/ca-certificates.crt ]; then \
+      mkdir -p /rootfs/etc/ssl; \
+      ln -sfn /etc/ssl/certs/ca-certificates.crt /rootfs/etc/ssl/cert.pem; \
     fi; \
     stage_ldd() { \
       target="$1"; \
@@ -205,7 +219,11 @@ COPY --from=guest-agent-builder /src/dist /rootfs/opt/guest-agent/dist
 # Build ext4 from directory tree then shrink to minimum so we don't ship empty space.
 RUN set -eux; \
   truncate -s 1G /rootfs.ext4; \
-  mke2fs -t ext4 -F -d /rootfs /rootfs.ext4; \
+  # NOTE: Some e2fsprogs builds have been observed to fail during `-d` population with:
+  #   "__populate_fs: Extent block checksum does not match extent block while writing file ..."
+  # Disabling metadata checksums avoids that codepath and is still compatible with our kernel (5.10)
+  # and offline resize workflow.
+  mke2fs -t ext4 -F -O ^metadata_csum,^metadata_csum_seed,^orphan_file -d /rootfs /rootfs.ext4; \
   e2fsck -pf /rootfs.ext4 || true; \
   resize2fs -M /rootfs.ext4; \
   e2fsck -pf /rootfs.ext4 || true; \
