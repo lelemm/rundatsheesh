@@ -4,10 +4,17 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 OUT_DIR="$ROOT_DIR/services/guest-image-alpine/dist"
 
+# Shell variant: "busybox" (default) or "bash" (NVM support)
+SHELL_VARIANT=${SHELL_VARIANT:-busybox}
+
+echo "[alpine] building with SHELL_VARIANT=$SHELL_VARIANT"
+
 mkdir -p "$OUT_DIR"
 
 docker build -f "$ROOT_DIR/services/guest-image-alpine/Dockerfile" \
   --progress=plain \
+  --network host \
+  --build-arg SHELL_VARIANT="$SHELL_VARIANT" \
   --output type=local,dest="$OUT_DIR" \
   "$ROOT_DIR"
 

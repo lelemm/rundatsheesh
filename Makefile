@@ -1,4 +1,4 @@
-.PHONY: deps build unit integration test verify admin-ui-deps admin-ui-build publish
+.PHONY: deps build unit integration integration-bash test verify admin-ui-deps admin-ui-build publish
 guest-images:
 	./scripts/build-guest-images.sh
 
@@ -46,6 +46,9 @@ unit:
 
 integration:
 	cd tests/integration && npm test
+
+integration-bash:
+	cd tests/integration && INTEGRATION_IMAGE=alpine-bash npm test
 
 test: unit integration
 

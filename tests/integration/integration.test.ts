@@ -625,5 +625,30 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
       await Promise.all([deleteVm(a.id), deleteVm(b.id)]);
     }
   });
+
+  it("exec: nvm is available and functional (bash image only)", async () => {
+    // Skip if not running with bash image (NVM only available in alpine-bash)
+    // TEST_BASH_IMAGE is set by run.sh when testing the alpine-bash image
+    if (process.env.TEST_BASH_IMAGE !== "true") {
+      return;
+    }
+
+    // Verify NVM is installed and available in bash
+    const nvmVersion = await vmExec(vmOk, "nvm --version");
+    // eslint-disable-next-line no-console
+    console.info("[it] nvm --version", { exitCode: nvmVersion.exitCode, stdout: nvmVersion.stdout, stderr: nvmVersion.stderr });
+    expect(nvmVersion.exitCode).toBe(0);
+    expect(nvmVersion.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/); // Version format: X.Y.Z
+
+    // Verify NVM can list remote versions (proves NVM shell functions loaded)
+    const nvmHelp = await vmExec(vmOk, "nvm help | head -5");
+    expect(nvmHelp.exitCode).toBe(0);
+    expect(nvmHelp.stdout).toContain("Node Version Manager");
+
+    // Verify .bashrc sources NVM correctly by checking NVM_DIR
+    const nvmDir = await vmExec(vmOk, "echo $NVM_DIR");
+    expect(nvmDir.exitCode).toBe(0);
+    expect(nvmDir.stdout.trim()).toContain(".nvm");
+  }, 30_000);
 });
 

@@ -192,6 +192,10 @@ ALPINE_ID=$(create_image "Alpine (integration)" "Built by integration runner")
 upload_file "$ALPINE_ID" "kernel" "$ROOT_DIR/dist/images/alpine/vmlinux"
 upload_file "$ALPINE_ID" "rootfs" "$ROOT_DIR/dist/images/alpine/rootfs.ext4"
 
+ALPINE_BASH_ID=$(create_image "Alpine Bash (integration)" "Built by integration runner - bash shell with NVM")
+upload_file "$ALPINE_BASH_ID" "kernel" "$ROOT_DIR/dist/images/alpine-bash/vmlinux"
+upload_file "$ALPINE_BASH_ID" "rootfs" "$ROOT_DIR/dist/images/alpine-bash/rootfs.ext4"
+
 if [ "$ENABLE_SNAPSHOTS" = "true" ]; then
   echo "Building template snapshot inside manager container..."
   docker exec "$CID" sh -lc 'node dist/index.js snapshot-build' || { echo "Snapshot build failed"; FAILED=1; exit 1; }
@@ -211,11 +215,29 @@ else
 fi
 
 echo "Running vitest integration suite..."
-echo "=== integration: default image (debian) ==="
-unset VM_IMAGE_ID
-npm -s run test:vitest || { FAILED=1; exit 1; }
 
-echo "=== integration: alpine image ==="
-export VM_IMAGE_ID="$ALPINE_ID"
-npm -s run test:vitest || { FAILED=1; exit 1; }
+# INTEGRATION_IMAGE can be set to run only a specific image variant:
+# - "alpine-bash" - test only the bash variant
+# - unset/empty - run all images (debian, alpine, alpine-bash)
+INTEGRATION_IMAGE=${INTEGRATION_IMAGE:-}
+
+if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "debian" ]; then
+  echo "=== integration: default image (debian) ==="
+  unset VM_IMAGE_ID
+  npm -s run test:vitest || { FAILED=1; exit 1; }
+fi
+
+if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "alpine" ]; then
+  echo "=== integration: alpine image ==="
+  export VM_IMAGE_ID="$ALPINE_ID"
+  npm -s run test:vitest || { FAILED=1; exit 1; }
+fi
+
+if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "alpine-bash" ]; then
+  echo "=== integration: alpine-bash image (with NVM) ==="
+  export VM_IMAGE_ID="$ALPINE_BASH_ID"
+  export TEST_BASH_IMAGE=true
+  npm -s run test:vitest || { FAILED=1; exit 1; }
+  unset TEST_BASH_IMAGE
+fi
 

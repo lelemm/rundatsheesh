@@ -8,6 +8,10 @@ const GROUP_ID = 1000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
 export const WORKSPACE_ROOT = "/workspace";
 
+// Shell variant: "busybox" (default, more confined) or "bash" (NVM support).
+// Set via JAIL_SHELL env var from guest-init at boot time.
+const JAIL_SHELL = process.env.JAIL_SHELL || "busybox";
+
 export function shellQuoteSingle(str: string): string {
   // Safe single-quote escape for POSIX shells: ' -> '\''.
   return `'${str.replace(/'/g, `'\\''`)}'`;
@@ -60,6 +64,18 @@ export async function runInJailShell(
   opts: { cwdInWorkspace?: string; env?: Record<string, string>; timeoutMs?: number; maxOutputBytes?: number }
 ): Promise<ExecResult> {
   const cwd = normalizeWorkspaceCwd(opts.cwdInWorkspace);
+
+  if (JAIL_SHELL === "bash") {
+    // Bash: source .bashrc for NVM support, then run command
+    const script = `source ~/.bashrc 2>/dev/null || true; cd ${shellQuoteSingle(cwd)} && ${cmd}`;
+    return runRootCommand(["chroot", buildChrootArgs("/bin/bash", ["-c", script])], {
+      env: buildJailEnv(opts.env),
+      timeoutMs: opts.timeoutMs,
+      maxOutputBytes: opts.maxOutputBytes
+    });
+  }
+
+  // Default: BusyBox sh (more confined)
   const script = `cd ${shellQuoteSingle(cwd)} && ${cmd}`;
   return runRootCommand(["chroot", buildChrootArgs("/bin/busybox", ["sh", "-c", script])], {
     env: buildJailEnv(opts.env),

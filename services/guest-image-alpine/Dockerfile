@@ -31,11 +31,15 @@ RUN chmod +x /usr/local/bin/build-kernel.sh \
 
 FROM alpine:3.20 AS guest-image-builder
 
+# Shell variant: "busybox" (default, more confined) or "bash" (NVM support)
+ARG SHELL_VARIANT=busybox
+
 # Tools needed to assemble + shrink ext4
 RUN apk add --no-cache \
   e2fsprogs e2fsprogs-extra \
   util-linux coreutils \
-  build-base
+  build-base \
+  curl
 
 WORKDIR /rootfs
 
@@ -57,8 +61,10 @@ RUN set -eux; \
   rm -rf /rootfs/var/cache/apk/* || true
 
 # Minimal init (PID1), compiled for Alpine (musl); static so it doesn't depend on shared libs in the rootfs.
+# Pass SHELL_VARIANT at compile time so guest-init sets JAIL_SHELL env var for guest-agent.
 COPY services/guest-image/init/guest-init.c /tmp/guest-init.c
-RUN gcc -O2 -static -o /rootfs/sbin/init /tmp/guest-init.c \
+ARG SHELL_VARIANT
+RUN gcc -O2 -static -DSHELL_VARIANT=\"${SHELL_VARIANT}\" -o /rootfs/sbin/init /tmp/guest-init.c \
   && chmod +x /rootfs/sbin/init \
   && rm -f /tmp/guest-init.c
 
@@ -102,6 +108,26 @@ RUN set -eux; \
   mkdir -p /rootfs/home/user/.deno/bin; \
   if [ ! -e /rootfs/home/user/.deno/bin/deno ]; then ln -s /usr/bin/deno /rootfs/home/user/.deno/bin/deno; fi; \
   chown -R 1000:1000 /rootfs/home/user/.deno
+
+# For bash variant: install NVM and create .bashrc with NVM initialization
+ARG SHELL_VARIANT
+RUN set -eux; \
+  if [ "$SHELL_VARIANT" = "bash" ]; then \
+    echo "[bash] Installing NVM for bash variant..."; \
+    # Download and extract NVM directly (avoid git clone which requires network in chroot)
+    NVM_VERSION="v0.40.1"; \
+    mkdir -p /rootfs/home/user/.nvm; \
+    curl -L "https://github.com/nvm-sh/nvm/archive/refs/tags/${NVM_VERSION}.tar.gz" | \
+      tar -xz -C /rootfs/home/user/.nvm --strip-components=1; \
+    chown -R 1000:1000 /rootfs/home/user/.nvm; \
+    # Create .bashrc with NVM initialization
+    printf '%s\n' \
+      'export NVM_DIR="$HOME/.nvm"' \
+      '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' \
+      > /rootfs/home/user/.bashrc; \
+    chown 1000:1000 /rootfs/home/user/.bashrc; \
+    echo "[bash] NVM installed successfully"; \
+  fi
 
 # Stage git into /opt/sandbox so `exec` (which chroots to /opt/sandbox) can run it.
 RUN set -eux; \
@@ -209,6 +235,27 @@ RUN set -eux; \
     stage_ldd /bin/tar; \
   fi; \
   chown -R 1000:1000 /rootfs/opt/sandbox/usr /rootfs/opt/sandbox/bin 2>/dev/null || true
+
+# For bash variant: stage bash into /opt/sandbox so exec can use it
+ARG SHELL_VARIANT
+RUN set -eux; \
+  if [ "$SHELL_VARIANT" = "bash" ]; then \
+    echo "[bash] Staging bash into sandbox..."; \
+    stage_ldd() { \
+      target="$1"; \
+      chroot /rootfs /usr/bin/ldd "$target" 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do \
+        if [ -e "/rootfs$dep" ]; then \
+          mkdir -p "/rootfs/opt/sandbox$(dirname "$dep")"; \
+          cp -aL "/rootfs$dep" "/rootfs/opt/sandbox$dep"; \
+        fi; \
+      done; \
+    }; \
+    mkdir -p /rootfs/opt/sandbox/bin; \
+    cp -a /rootfs/bin/bash /rootfs/opt/sandbox/bin/bash; \
+    stage_ldd /bin/bash; \
+    chown -R 1000:1000 /rootfs/opt/sandbox/bin 2>/dev/null || true; \
+    echo "[bash] Bash staged successfully"; \
+  fi
 
 # Guest agent runtime (ESM + dependencies)
 COPY --from=guest-agent-builder /src/package.json /rootfs/opt/guest-agent/package.json

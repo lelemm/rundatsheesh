@@ -522,7 +522,7 @@ docker compose up -d
               </div>
             </div>
             <div className="text-center mt-8">
-              <Link href="/swagger">
+              <Link href="/docs/api/">
                 <Button variant="outline" className="gap-2 bg-transparent">
                   <FileJson className="w-4 h-4" /> View Full API Reference
                 </Button>

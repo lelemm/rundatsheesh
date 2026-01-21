@@ -11,6 +11,12 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+// Shell variant: "busybox" (default) or "bash" (NVM support).
+// Set at compile time via -DSHELL_VARIANT=\"bash\" or defaults to busybox.
+#ifndef SHELL_VARIANT
+#define SHELL_VARIANT "busybox"
+#endif
+
 static void log_line(const char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
@@ -92,6 +98,9 @@ int main(void) {
   char *ip_lo_addr[] = { (char *)"ip", (char *)"addr", (char *)"add", (char *)"127.0.0.1/8", (char *)"dev", (char *)"lo", NULL };
   // Ignore error if already assigned.
   run_wait("/sbin/ip", ip_lo_addr);
+
+  log_line("[init] shell variant: %s", SHELL_VARIANT);
+  setenv("JAIL_SHELL", SHELL_VARIANT, 1);
 
   log_line("[init] starting guest-agent");
   setenv("PORT", "8080", 1);
