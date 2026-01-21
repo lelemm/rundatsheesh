@@ -5,6 +5,7 @@ import type { ExecRunner } from "../types/interfaces.js";
 import type { ExecRequest, ExecResult, RunTsRequest } from "../types/agent.js";
 import { resolveWorkspacePathToChroot, resolveWorkspacePathToHost } from "../files/pathPolicy.js";
 import { JAIL_GROUP_ID, JAIL_USER_ID, runInJailShell, shellQuoteSingle } from "./jail.js";
+import { SANDBOX_ROOT } from "../config/constants.js";
 
 export class ExecRunnerImpl implements ExecRunner {
   async exec(payload: ExecRequest): Promise<ExecResult> {
@@ -17,14 +18,19 @@ export class ExecRunnerImpl implements ExecRunner {
     const { entry, cleanupPaths, resultPath } = await prepareRunTsEntry(payload);
     const denoBin = "/usr/bin/deno";
 
+    // Ensure /tmp inside the chroot is writable by the jail user (for TMPDIR).
+    const tmpDirHost = path.join(SANDBOX_ROOT, "tmp");
+    await fs.mkdir(tmpDirHost, { recursive: true });
+    await fs.chown(tmpDirHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
+
     const extraEnv = parseEnvArray(payload.env);
     const allowEnvNames = Object.keys(extraEnv);
 
     const args = [
       "run",
       "--quiet",
-      "--allow-read=/workspace,/etc/resolv.conf,/etc/hosts,/etc/nsswitch.conf,/etc/ssl/certs/ca-certificates.crt",
-      "--allow-write=/workspace"
+      "--allow-read=/workspace,/tmp,/etc/resolv.conf,/etc/hosts,/etc/nsswitch.conf,/etc/ssl/certs/ca-certificates.crt",
+      "--allow-write=/workspace,/tmp"
     ];
     if (allowEnvNames.length) {
       // Allow access only to the explicitly provided env vars.
@@ -44,7 +50,7 @@ export class ExecRunnerImpl implements ExecRunner {
       cwdInWorkspace: cwd,
       env: {
         DENO_DIR: "/workspace/.deno",
-        TMPDIR: "/workspace/.tmp",
+        TMPDIR: "/tmp",
         // Disable ANSI colors in Deno output (still strip as a fallback below).
         NO_COLOR: "1",
         TERM: "dumb",

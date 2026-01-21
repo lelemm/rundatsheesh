@@ -325,7 +325,7 @@ export function VMsPanel() {
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full overflow-hidden">
       <AlertDialog open={!!vmToDelete} onOpenChange={(open) => !open && setVmToDelete(null)}>
         <AlertDialogContent className="bg-card border-border">
           <AlertDialogHeader>
@@ -349,8 +349,8 @@ export function VMsPanel() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <div className={`flex-1 p-6 space-y-6 ${selectedVM ? "border-r border-border" : ""}`}>
-        <div className="flex items-center justify-between">
+      <div className={`flex-1 p-6 flex flex-col overflow-hidden ${selectedVM ? "border-r border-border" : ""}`}>
+        <div className="flex items-center justify-between shrink-0 mb-6">
           <div>
             <h2 className="text-2xl font-semibold text-foreground">Virtual Machines</h2>
             <p className="text-muted-foreground text-sm mt-1">Manage your Firecracker microVMs</p>
@@ -510,7 +510,7 @@ export function VMsPanel() {
           </Dialog>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-4 shrink-0 mb-4">
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
@@ -530,10 +530,10 @@ export function VMsPanel() {
           </Button>
         </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
-      {loading && <p className="text-sm text-muted-foreground">Loading VMs…</p>}
+      {error && <p className="text-sm text-destructive shrink-0">{error}</p>}
+      {loading && <p className="text-sm text-muted-foreground shrink-0">Loading VMs…</p>}
 
-        <div className="grid gap-3">
+        <div className="grid gap-3 overflow-auto flex-1">
           {filteredVMs.map((vm) => (
             <Card
               key={vm.id}

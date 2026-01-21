@@ -35,7 +35,7 @@ export function buildJailEnv(extra?: Record<string, string>) {
     LOGNAME: "user",
     SHELL: "/bin/sh",
     LANG: "C.UTF-8",
-    TMPDIR: "/workspace/.tmp",
+    TMPDIR: "/tmp",
     ...restExtra,
     NODE_OPTIONS: forcedNodeOptions
   };

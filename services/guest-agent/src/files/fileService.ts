@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { FileService } from "../types/interfaces.js";
 import { resolveWorkspacePathToChroot, resolveWorkspacePathToHost } from "./pathPolicy.js";
 import { JAIL_GROUP_ID, JAIL_USER_ID, spawnInJail, runInJail } from "../exec/jail.js";
+import { SANDBOX_ROOT } from "../config/constants.js";
 const MAX_UPLOAD_COMPRESSED_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_UNCOMPRESSED_BYTES = 50 * 1024 * 1024;
 const MAX_TAR_ENTRIES = 10_000;
@@ -16,12 +17,12 @@ export class TarFileService implements FileService {
     // Ensure extracted files are writable when extraction runs as uid/gid 1000 inside the jail.
     await fs.chown(destHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
 
-    const tmpDirHost = resolveWorkspacePathToHost("/workspace/.tmp");
-    await fs.mkdir(tmpDirHost, { recursive: true });
-    await fs.chown(tmpDirHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
+    // Use /tmp inside the chroot (outside /workspace) so temp files don't interfere with user workflows.
     const tmpName = `upload-${randomUUID()}.tar.gz`;
+    const tmpDirHost = path.join(SANDBOX_ROOT, "tmp");
+    await fs.mkdir(tmpDirHost, { recursive: true });
     const tmpHost = path.join(tmpDirHost, tmpName);
-    const tmpChroot = resolveWorkspacePathToChroot(`/workspace/.tmp/${tmpName}`);
+    const tmpChroot = `/tmp/${tmpName}`;
 
     await streamToFile(payload, tmpHost, { maxBytes: MAX_UPLOAD_COMPRESSED_BYTES });
     await fs.chown(tmpHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
