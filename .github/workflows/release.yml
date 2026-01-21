@@ -13,14 +13,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set tag version
         run: echo "TAG_VERSION=${{ github.event.release.tag_name }}" >> "$GITHUB_ENV"
 
+      - name: Detect guest image changes
+        id: guest_changes
+        run: |
+          set -euo pipefail
+          if git diff --name-only "$GITHUB_EVENT_BEFORE" "$GITHUB_SHA" -- \
+            services/guest-image/ services/guest-agent/ | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build guest images
+        if: steps.guest_changes.outputs.changed == 'true'
         run: ./scripts/build-guest-images.sh
 
       - name: Package guest images
+        if: steps.guest_changes.outputs.changed == 'true'
         run: |
           mkdir -p dist/release
           zip -j "dist/release/guest-image-debian-${TAG_VERSION}.zip" \
@@ -31,6 +46,7 @@ jobs:
             dist/images/alpine/rootfs.ext4
 
       - name: Upload release assets
+        if: steps.guest_changes.outputs.changed == 'true'
         uses: softprops/action-gh-release@v2
         with:
           files: |
