@@ -156,6 +156,7 @@ async function vmRunTsPath(vmId: string, path: string): Promise<ExecResult> {
 describe.sequential("run-dat-sheesh integration (vitest)", () => {
   let vmDeny = "";
   let vmOk = "";
+  let nvmVm = ""; // VM with full internet access for NVM testing (bash image only)
   let tmpDir = "";
   let uploadBuf: Uint8Array | null = null;
   let sdkUploadBuf: Uint8Array | null = null;
@@ -179,6 +180,11 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
 
     vmDeny = (await createVm({ cpu: 1, memMb: 256, allowIps: ["1.2.3.4/32"], outboundInternet: true })).id;
     vmOk = (await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true })).id;
+
+    // For bash image testing: create a VM with full internet access for NVM to download Node.js
+    if (process.env.TEST_BASH_IMAGE === "true") {
+      nvmVm = (await createVm({ cpu: 1, memMb: 512, allowIps: ["0.0.0.0/0"], outboundInternet: true })).id;
+    }
 
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "run-dat-sheesh-it-"));
     // Backstop cleanup for abrupt exits (SIGINT, etc). Vitest should run afterAll, but don't rely on it.
@@ -231,6 +237,7 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     try {
       if (vmDeny) await deleteVm(vmDeny);
       if (vmOk) await deleteVm(vmOk);
+      if (nvmVm) await deleteVm(nvmVm);
     } finally {
       cleanupTmpDir();
     }
@@ -634,21 +641,60 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     }
 
     // Verify NVM is installed and available in bash
-    const nvmVersion = await vmExec(vmOk, "nvm --version");
+    const nvmVersion = await vmExec(nvmVm, "nvm --version");
     // eslint-disable-next-line no-console
     console.info("[it] nvm --version", { exitCode: nvmVersion.exitCode, stdout: nvmVersion.stdout, stderr: nvmVersion.stderr });
     expect(nvmVersion.exitCode).toBe(0);
     expect(nvmVersion.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/); // Version format: X.Y.Z
 
     // Verify NVM can list remote versions (proves NVM shell functions loaded)
-    const nvmHelp = await vmExec(vmOk, "nvm help | head -5");
+    const nvmHelp = await vmExec(nvmVm, "nvm help | head -5");
     expect(nvmHelp.exitCode).toBe(0);
     expect(nvmHelp.stdout).toContain("Node Version Manager");
 
     // Verify .bashrc sources NVM correctly by checking NVM_DIR
-    const nvmDir = await vmExec(vmOk, "echo $NVM_DIR");
+    const nvmDir = await vmExec(nvmVm, "echo $NVM_DIR");
     expect(nvmDir.exitCode).toBe(0);
     expect(nvmDir.stdout.trim()).toContain(".nvm");
   }, 30_000);
+
+  it("exec: nvm can install and run Node.js (bash image only)", async () => {
+    // Skip if not running with bash image
+    if (process.env.TEST_BASH_IMAGE !== "true") {
+      return;
+    }
+
+    // Check network connectivity first - nvm needs to reach nodejs.org
+    const netCheck = await vmExec(nvmVm, "curl -sI --connect-timeout 5 https://nodejs.org 2>&1 | head -1");
+    // eslint-disable-next-line no-console
+    console.info("[it] network check", { exitCode: netCheck.exitCode, stdout: netCheck.stdout, stderr: netCheck.stderr });
+
+    const hasInternet = netCheck.stdout.includes("HTTP");
+    if (!hasInternet) {
+      // eslint-disable-next-line no-console
+      console.info("[it] skipping nvm install test - no internet connectivity (this is expected in CI)");
+      return;
+    }
+
+    // Install Node.js via NVM - this tests gcompat (glibc compatibility)
+    const nvmInstall = await vmExec(nvmVm, "nvm install v25.4.0");
+    // eslint-disable-next-line no-console
+    console.info("[it] nvm install v25.4.0", { exitCode: nvmInstall.exitCode, stdout: nvmInstall.stdout, stderr: nvmInstall.stderr });
+    expect(nvmInstall.exitCode).toBe(0);
+
+    // Verify node is runnable after nvm install (tests gcompat + libatomic + libucontext)
+    const nodeVersion = await vmExec(nvmVm, "nvm use v25.4.0 && node --version");
+    // eslint-disable-next-line no-console
+    console.info("[it] node --version", { exitCode: nodeVersion.exitCode, stdout: nodeVersion.stdout, stderr: nodeVersion.stderr });
+    expect(nodeVersion.exitCode).toBe(0);
+    expect(nodeVersion.stdout.trim()).toMatch(/^v25\.\d+\.\d+$/);
+
+    // Verify npm is also functional
+    const npmVersion = await vmExec(nvmVm, "nvm use v25.4.0 && npm --version");
+    // eslint-disable-next-line no-console
+    console.info("[it] npm --version", { exitCode: npmVersion.exitCode, stdout: npmVersion.stdout, stderr: npmVersion.stderr });
+    expect(npmVersion.exitCode).toBe(0);
+    expect(npmVersion.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+  }, 120_000); // 2 minute timeout for download
 });
 

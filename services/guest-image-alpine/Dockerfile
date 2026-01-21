@@ -56,7 +56,7 @@ RUN set -eux; \
     deno \
     git \
     musl-utils \
-    gcompat \
+    gcompat libucontext libatomic \
   ; \
   # Ensure apk leaves no cache inside the rootfs.
   rm -rf /rootfs/var/cache/apk/* || true
@@ -182,6 +182,27 @@ RUN set -eux; \
     for lib in /rootfs/usr/lib/libobstack.so*; do \
       if [ -e "$lib" ]; then \
         mkdir -p /rootfs/opt/sandbox/usr/lib; \
+        cp -aL "$lib" "/rootfs/opt/sandbox/usr/lib/$(basename "$lib")"; \
+        echo "[bash]   staged: $(basename "$lib")"; \
+      fi; \
+    done; \
+    # Stage libucontext (required by gcompat for setcontext/makecontext)
+    for lib in /rootfs/usr/lib/libucontext.so*; do \
+      if [ -e "$lib" ]; then \
+        cp -aL "$lib" "/rootfs/opt/sandbox/usr/lib/$(basename "$lib")"; \
+        echo "[bash]   staged: $(basename "$lib")"; \
+      fi; \
+    done; \
+    # Also check /lib for libucontext
+    for lib in /rootfs/lib/libucontext.so*; do \
+      if [ -e "$lib" ]; then \
+        cp -aL "$lib" "/rootfs/opt/sandbox/lib/$(basename "$lib")"; \
+        echo "[bash]   staged: $(basename "$lib") (from /lib)"; \
+      fi; \
+    done; \
+    # Stage libatomic (required by Node.js for atomic operations)
+    for lib in /rootfs/usr/lib/libatomic.so*; do \
+      if [ -e "$lib" ]; then \
         cp -aL "$lib" "/rootfs/opt/sandbox/usr/lib/$(basename "$lib")"; \
         echo "[bash]   staged: $(basename "$lib")"; \
       fi; \
