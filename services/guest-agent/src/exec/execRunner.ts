@@ -79,13 +79,13 @@ async function prepareRunTsEntry(payload: RunTsRequest): Promise<{ entry: string
   // and so we can persist a structured {result,error} payload to a known file.
   const id = randomUUID();
   const cleanupPaths: string[] = [];
-  const resultPath = `/workspace/.tmp/run-ts-result-${id}.json`;
+  const resultPath = `/workspace/.run-ts-result-${id}.json`;
   const wrapperPath = `/workspace/.run-ts-wrapper-${id}.ts`;
 
   const dirHostWorkspace = resolveWorkspacePathToHost("/workspace");
-  const dirHostTmp = resolveWorkspacePathToHost("/workspace/.tmp");
   await fs.mkdir(dirHostWorkspace, { recursive: true });
-  await fs.mkdir(dirHostTmp, { recursive: true });
+  // Ensure /workspace is writable by the jail user so Deno can write files (result, TMPDIR, etc).
+  await fs.chown(dirHostWorkspace, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
 
   let targetUrl = "";
   if (payload.path) {
