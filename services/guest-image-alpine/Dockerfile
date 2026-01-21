@@ -69,36 +69,95 @@ RUN gcc -O2 -static -DSHELL_VARIANT=\"${SHELL_VARIANT}\" -o /rootfs/sbin/init /t
   && rm -f /tmp/guest-init.c
 
 # Create runtime layout + untrusted user directory at /home/user (workspace)
+# Sandbox shell setup depends on SHELL_VARIANT: busybox (default) or bash (with GNU coreutils)
+ARG SHELL_VARIANT
 RUN set -eux; \
   mkdir -p /rootfs/home/user /rootfs/opt/guest-agent /rootfs/home/user/.deno /rootfs/home/user/.tmp; \
   # Create user/group deterministically (uid/gid 1000). Alpine uses busybox adduser/addgroup.
   chroot /rootfs /bin/sh -c 'addgroup -g 1000 user || true; adduser -D -u 1000 -G user -s /bin/bash user || true; passwd -l root || true'; \
-  # Confined toolchain under /opt/sandbox (static busybox)
+  # Confined toolchain under /opt/sandbox
   mkdir -p /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/dev /rootfs/opt/sandbox/tmp; \
   mkdir -p /rootfs/opt/sandbox/usr/bin /rootfs/opt/sandbox/etc/ssl/certs; \
   mkdir -p /rootfs/opt/sandbox/home/user /rootfs/opt/sandbox/workspace; \
-  bb_src=""; \
-  for cand in /rootfs/bin/busybox.static /rootfs/bin/busybox /rootfs/usr/bin/busybox /rootfs/usr/sbin/busybox; do \
-    if [ -x "$cand" ]; then bb_src="$cand"; break; fi; \
-  done; \
-  if [ -z "$bb_src" ]; then \
-    echo "busybox binary not found in rootfs; expected busybox-static to install one of: /bin/busybox.static, /bin/busybox, /usr/bin/busybox"; \
-    ls -la /rootfs/bin || true; \
-    ls -la /rootfs/usr/bin || true; \
-    exit 1; \
-  fi; \
-  cp "$bb_src" /rootfs/opt/sandbox/bin/busybox; \
-  chmod 0755 /rootfs/opt/sandbox/bin/busybox; \
-  # IMPORTANT: the guest-agent later does `chroot --userspec=1000:1000 /opt/sandbox /bin/busybox sh -c ...`
-  # so all applet symlinks must be valid *within* that chroot. If we install symlinks that point to
-  # `/opt/sandbox/bin/busybox`, they will break after chrooting. Install inside a chroot rooted at /opt/sandbox
-  # so symlinks target `/bin/busybox` (valid inside the confinement).
-  chroot /rootfs/opt/sandbox /bin/busybox --install -s /bin; \
-  # Device nodes inside the /opt/sandbox chroot
+  # Device nodes inside the /opt/sandbox chroot (needed for both variants)
   mknod -m 666 /rootfs/opt/sandbox/dev/null c 1 3 || true; \
   mknod -m 666 /rootfs/opt/sandbox/dev/zero c 1 5 || true; \
   mknod -m 666 /rootfs/opt/sandbox/dev/random c 1 8 || true; \
   mknod -m 666 /rootfs/opt/sandbox/dev/urandom c 1 9 || true; \
+  # Shell variant: busybox (static busybox with applet symlinks)
+  if [ "$SHELL_VARIANT" != "bash" ]; then \
+    echo "[busybox] Setting up BusyBox sandbox..."; \
+    bb_src=""; \
+    for cand in /rootfs/bin/busybox.static /rootfs/bin/busybox /rootfs/usr/bin/busybox /rootfs/usr/sbin/busybox; do \
+      if [ -x "$cand" ]; then bb_src="$cand"; break; fi; \
+    done; \
+    if [ -z "$bb_src" ]; then \
+      echo "busybox binary not found in rootfs; expected busybox-static to install one of: /bin/busybox.static, /bin/busybox, /usr/bin/busybox"; \
+      ls -la /rootfs/bin || true; \
+      ls -la /rootfs/usr/bin || true; \
+      exit 1; \
+    fi; \
+    cp "$bb_src" /rootfs/opt/sandbox/bin/busybox; \
+    chmod 0755 /rootfs/opt/sandbox/bin/busybox; \
+    # IMPORTANT: the guest-agent does `chroot --userspec=1000:1000 /opt/sandbox /bin/busybox sh -c ...`
+    # so all applet symlinks must be valid *within* that chroot. Install inside a chroot rooted at /opt/sandbox
+    # so symlinks target `/bin/busybox` (valid inside the confinement).
+    chroot /rootfs/opt/sandbox /bin/busybox --install -s /bin; \
+    echo "[busybox] BusyBox sandbox ready"; \
+  fi; \
+  # Shell variant: bash (bash + GNU coreutils, no busybox)
+  if [ "$SHELL_VARIANT" = "bash" ]; then \
+    echo "[bash] Setting up Bash + GNU coreutils sandbox..."; \
+    stage_ldd() { \
+      target="$1"; \
+      chroot /rootfs /usr/bin/ldd "$target" 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do \
+        if [ -e "/rootfs$dep" ]; then \
+          mkdir -p "/rootfs/opt/sandbox$(dirname "$dep")"; \
+          cp -aL "/rootfs$dep" "/rootfs/opt/sandbox$dep"; \
+        fi; \
+      done; \
+    }; \
+    # Stage a command: resolve symlink, copy binary, stage deps
+    stage_cmd() { \
+      cmd="$1"; \
+      for path in /rootfs/usr/bin/$cmd /rootfs/bin/$cmd; do \
+        if [ -e "$path" ]; then \
+          real_path=$(chroot /rootfs readlink -f "${path#/rootfs}"); \
+          dest="/rootfs/opt/sandbox${path#/rootfs}"; \
+          mkdir -p "$(dirname "$dest")"; \
+          cp -aL "/rootfs$real_path" "$dest"; \
+          stage_ldd "$real_path"; \
+          echo "[bash]   staged: $cmd -> $real_path"; \
+          return 0; \
+        fi; \
+      done; \
+      echo "[bash]   warning: $cmd not found"; \
+      return 1; \
+    }; \
+    # Stage bash
+    cp -aL /rootfs/bin/bash /rootfs/opt/sandbox/bin/bash; \
+    stage_ldd /bin/bash; \
+    # Create /bin/sh symlink to bash
+    ln -sf bash /rootfs/opt/sandbox/bin/sh; \
+    # Stage GNU coreutils - all essential commands for NVM and general use
+    for cmd in ls head tail sort cut tr dirname basename wc cat tee mkdir rm mv cp chmod chown ln readlink mktemp sleep date touch env id whoami uname expr seq test printf echo true false yes xargs find; do \
+      stage_cmd "$cmd" || true; \
+    done; \
+    # Stage grep, sed, awk - text processing
+    for cmd in grep sed awk gawk; do \
+      stage_cmd "$cmd" || true; \
+    done; \
+    # Stage compression tools (required for tar -z/-j operations)
+    for cmd in gzip gunzip zcat bzip2 bunzip2 xz unxz; do \
+      stage_cmd "$cmd" || true; \
+    done; \
+    # Stage curl and wget for downloads
+    for cmd in curl wget; do \
+      stage_cmd "$cmd" || true; \
+    done; \
+    chown -R 1000:1000 /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/usr/bin 2>/dev/null || true; \
+    echo "[bash] Bash sandbox ready"; \
+  fi; \
   chown -R 1000:1000 /rootfs/home/user
 
 # Ensure paths expected by guest-init + guest-agent exist
@@ -235,55 +294,6 @@ RUN set -eux; \
     stage_ldd /bin/tar; \
   fi; \
   chown -R 1000:1000 /rootfs/opt/sandbox/usr /rootfs/opt/sandbox/bin 2>/dev/null || true
-
-# For bash variant: stage bash and GNU coreutils into /opt/sandbox so exec can use them
-# NVM requires GNU coreutils (ls -q, head, etc.) which BusyBox doesn't fully support
-ARG SHELL_VARIANT
-RUN set -eux; \
-  if [ "$SHELL_VARIANT" = "bash" ]; then \
-    echo "[bash] Staging bash and GNU coreutils into sandbox..."; \
-    stage_ldd() { \
-      target="$1"; \
-      chroot /rootfs /usr/bin/ldd "$target" 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do \
-        if [ -e "/rootfs$dep" ]; then \
-          mkdir -p "/rootfs/opt/sandbox$(dirname "$dep")"; \
-          cp -aL "/rootfs$dep" "/rootfs/opt/sandbox$dep"; \
-        fi; \
-      done; \
-    }; \
-    mkdir -p /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/usr/bin; \
-    # Stage bash
-    cp -a /rootfs/bin/bash /rootfs/opt/sandbox/bin/bash; \
-    stage_ldd /bin/bash; \
-    # Stage GNU coreutils - these override BusyBox symlinks for NVM compatibility
-    # Key utilities NVM needs: ls, head, tail, sort, cut, tr, dirname, basename, wc, etc.
-    for cmd in ls head tail sort cut tr dirname basename wc cat tee mkdir rm mv cp chmod chown ln readlink mktemp sleep date; do \
-      for path in /rootfs/usr/bin/$cmd /rootfs/bin/$cmd; do \
-        if [ -x "$path" ] && [ ! -L "$path" ]; then \
-          dest="/rootfs/opt/sandbox${path#/rootfs}"; \
-          mkdir -p "$(dirname "$dest")"; \
-          cp -a "$path" "$dest"; \
-          stage_ldd "${path#/rootfs}"; \
-          break; \
-        fi; \
-      done; \
-    done; \
-    # Stage grep (might be in different location)
-    if [ -x /rootfs/bin/grep ]; then \
-      cp -a /rootfs/bin/grep /rootfs/opt/sandbox/bin/grep; \
-      stage_ldd /bin/grep; \
-    elif [ -x /rootfs/usr/bin/grep ]; then \
-      cp -a /rootfs/usr/bin/grep /rootfs/opt/sandbox/usr/bin/grep; \
-      stage_ldd /usr/bin/grep; \
-    fi; \
-    # Stage curl for NVM downloads (better than wget)
-    if [ -x /rootfs/usr/bin/curl ]; then \
-      cp -a /rootfs/usr/bin/curl /rootfs/opt/sandbox/usr/bin/curl; \
-      stage_ldd /usr/bin/curl; \
-    fi; \
-    chown -R 1000:1000 /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/usr/bin 2>/dev/null || true; \
-    echo "[bash] Bash and coreutils staged successfully"; \
-  fi
 
 # Guest agent runtime (ESM + dependencies)
 COPY --from=guest-agent-builder /src/package.json /rootfs/opt/guest-agent/package.json
