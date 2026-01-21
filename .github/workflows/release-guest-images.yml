@@ -1,4 +1,4 @@
-name: Build release assets
+name: Release Guest Images (BusyBox)
 
 on:
   release:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  build-release:
+  guest-images:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -20,10 +20,9 @@ jobs:
         run: echo "TAG_VERSION=${{ github.event.release.tag_name }}" >> "$GITHUB_ENV"
 
       - name: Detect guest image changes
-        id: guest_changes
+        id: changes
         run: |
           set -euo pipefail
-          # Get the previous tag (excluding current)
           CURRENT_TAG="${{ github.event.release.tag_name }}"
           PREV_TAG=$(git tag --sort=-v:refname | grep -v "^${CURRENT_TAG}$" | head -n1 || true)
           
@@ -43,43 +42,27 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build guest images
-        if: steps.guest_changes.outputs.changed == 'true'
-        run: ./scripts/build-guest-images.sh
+      - name: Build Debian guest image
+        if: steps.changes.outputs.changed == 'true'
+        run: ./services/guest-image/build.sh
+
+      - name: Build Alpine guest image (busybox)
+        if: steps.changes.outputs.changed == 'true'
+        run: SHELL_VARIANT=busybox ./services/guest-image-alpine/build.sh
 
       - name: Package guest images
-        if: steps.guest_changes.outputs.changed == 'true'
+        if: steps.changes.outputs.changed == 'true'
         run: |
           mkdir -p dist/release
           zip -j "dist/release/guest-image-debian-${TAG_VERSION}.zip" \
-            dist/images/debian/vmlinux \
-            dist/images/debian/rootfs.ext4
+            services/guest-image/dist/vmlinux \
+            services/guest-image/dist/rootfs.ext4
           zip -j "dist/release/guest-image-alpine-${TAG_VERSION}.zip" \
-            dist/images/alpine/vmlinux \
-            dist/images/alpine/rootfs.ext4
+            services/guest-image-alpine/dist/vmlinux \
+            services/guest-image-alpine/dist/rootfs.ext4
 
       - name: Upload release assets
-        if: steps.guest_changes.outputs.changed == 'true'
+        if: steps.changes.outputs.changed == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/release/*.zip
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Build and push manager image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: services/manager/Dockerfile
-          push: true
-          tags: |
-            lelemm/rundatsheesh:latest
-            lelemm/rundatsheesh:${{ env.TAG_VERSION }}
+          files: dist/release/*.zip
