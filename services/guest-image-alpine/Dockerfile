@@ -236,11 +236,12 @@ RUN set -eux; \
   fi; \
   chown -R 1000:1000 /rootfs/opt/sandbox/usr /rootfs/opt/sandbox/bin 2>/dev/null || true
 
-# For bash variant: stage bash into /opt/sandbox so exec can use it
+# For bash variant: stage bash and GNU coreutils into /opt/sandbox so exec can use them
+# NVM requires GNU coreutils (ls -q, head, etc.) which BusyBox doesn't fully support
 ARG SHELL_VARIANT
 RUN set -eux; \
   if [ "$SHELL_VARIANT" = "bash" ]; then \
-    echo "[bash] Staging bash into sandbox..."; \
+    echo "[bash] Staging bash and GNU coreutils into sandbox..."; \
     stage_ldd() { \
       target="$1"; \
       chroot /rootfs /usr/bin/ldd "$target" 2>/dev/null | awk '{ for (i=1;i<=NF;i++) if (substr($i,1,1)=="/") print $i }' | while read -r dep; do \
@@ -250,11 +251,38 @@ RUN set -eux; \
         fi; \
       done; \
     }; \
-    mkdir -p /rootfs/opt/sandbox/bin; \
+    mkdir -p /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/usr/bin; \
+    # Stage bash
     cp -a /rootfs/bin/bash /rootfs/opt/sandbox/bin/bash; \
     stage_ldd /bin/bash; \
-    chown -R 1000:1000 /rootfs/opt/sandbox/bin 2>/dev/null || true; \
-    echo "[bash] Bash staged successfully"; \
+    # Stage GNU coreutils - these override BusyBox symlinks for NVM compatibility
+    # Key utilities NVM needs: ls, head, tail, sort, cut, tr, dirname, basename, wc, etc.
+    for cmd in ls head tail sort cut tr dirname basename wc cat tee mkdir rm mv cp chmod chown ln readlink mktemp sleep date; do \
+      for path in /rootfs/usr/bin/$cmd /rootfs/bin/$cmd; do \
+        if [ -x "$path" ] && [ ! -L "$path" ]; then \
+          dest="/rootfs/opt/sandbox${path#/rootfs}"; \
+          mkdir -p "$(dirname "$dest")"; \
+          cp -a "$path" "$dest"; \
+          stage_ldd "${path#/rootfs}"; \
+          break; \
+        fi; \
+      done; \
+    done; \
+    # Stage grep (might be in different location)
+    if [ -x /rootfs/bin/grep ]; then \
+      cp -a /rootfs/bin/grep /rootfs/opt/sandbox/bin/grep; \
+      stage_ldd /bin/grep; \
+    elif [ -x /rootfs/usr/bin/grep ]; then \
+      cp -a /rootfs/usr/bin/grep /rootfs/opt/sandbox/usr/bin/grep; \
+      stage_ldd /usr/bin/grep; \
+    fi; \
+    # Stage curl for NVM downloads (better than wget)
+    if [ -x /rootfs/usr/bin/curl ]; then \
+      cp -a /rootfs/usr/bin/curl /rootfs/opt/sandbox/usr/bin/curl; \
+      stage_ldd /usr/bin/curl; \
+    fi; \
+    chown -R 1000:1000 /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/usr/bin 2>/dev/null || true; \
+    echo "[bash] Bash and coreutils staged successfully"; \
   fi
 
 # Guest agent runtime (ESM + dependencies)
