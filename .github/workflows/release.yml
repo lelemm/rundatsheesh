@@ -1,0 +1,56 @@
+name: Build release assets
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set tag version
+        run: echo "TAG_VERSION=${{ github.event.release.tag_name }}" >> "$GITHUB_ENV"
+
+      - name: Build guest images
+        run: ./scripts/build-guest-images.sh
+
+      - name: Package guest images
+        run: |
+          mkdir -p dist/release
+          zip -j "dist/release/guest-image-debian-${TAG_VERSION}.zip" \
+            dist/images/debian/vmlinux \
+            dist/images/debian/rootfs.ext4
+          zip -j "dist/release/guest-image-alpine-${TAG_VERSION}.zip" \
+            dist/images/alpine/vmlinux \
+            dist/images/alpine/rootfs.ext4
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/release/*.zip
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push manager image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/manager/Dockerfile
+          push: true
+          tags: |
+            lelemm/rundatsheesh:latest
+            lelemm/rundatsheesh:${{ env.TAG_VERSION }}
