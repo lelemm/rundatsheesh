@@ -694,6 +694,49 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     }
   );
 
+  app.get(
+    "/v1/vms/:id/logs",
+    {
+      schema: {
+        summary: "Get VM logs",
+        description: "Returns the tail of a VM log file (firecracker.log by default).",
+        tags: ["vms"],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string", description: "VM id" } }
+        },
+        querystring: {
+          type: "object",
+          properties: {
+            type: { type: "string", description: "Log file (firecracker.log | firecracker.stdout.log | firecracker.stderr.log)" },
+            tail: { type: "number", description: "Number of lines to return (max 1000)" }
+          }
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["type", "lines", "truncated"],
+            properties: {
+              type: { type: "string" },
+              lines: { type: "array", items: { type: "string" } },
+              truncated: { type: "boolean" },
+              updatedAt: { type: "string" }
+            }
+          },
+          400: ERROR_RESPONSE
+        }
+      }
+    },
+    async (request) => {
+      const { id } = request.params as { id: string };
+      requireValidVmId(id);
+      const query = request.query as { type?: string; tail?: number } | undefined;
+      const tail = query?.tail !== undefined ? Number(query.tail) : undefined;
+      return opts.deps.vmService.getLogs(id, { type: query?.type, tail });
+    }
+  );
+
   app.post(
     "/v1/vms",
     {

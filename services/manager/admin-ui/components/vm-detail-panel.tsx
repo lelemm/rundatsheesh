@@ -1,13 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import type React from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { apiRequestJson } from "@/lib/api"
+import { apiGetJson, apiRequestJson } from "@/lib/api"
 import {
   X,
   Terminal,
@@ -21,6 +22,7 @@ import {
   WifiOff,
   Clock,
   Send,
+  Loader2,
 } from "lucide-react"
 
 interface VM {
@@ -36,12 +38,23 @@ interface VM {
 interface VMDetailPanelProps {
   vm: VM
   onClose: () => void
+  onCreateSnapshot: (event: React.MouseEvent) => void
+  isSnapshotting: boolean
+  latestSnapshotId?: string
+  canSnapshot: boolean
 }
 
 interface ExecResult {
   exitCode: number
   stdout: string
   stderr: string
+}
+
+interface LogsResponse {
+  type: string
+  lines: string[]
+  truncated: boolean
+  updatedAt?: string
 }
 
 function splitLines(text: string): string[] {
@@ -67,24 +80,25 @@ function formatExecResult(result: ExecResult): string[] {
   return lines
 }
 
-const mockLogs = `[2024-01-15 10:30:15] VM boot started
-[2024-01-15 10:30:16] Loading kernel...
-[2024-01-15 10:30:17] Kernel loaded successfully
-[2024-01-15 10:30:18] Mounting root filesystem...
-[2024-01-15 10:30:19] Starting init process...
-[2024-01-15 10:30:20] Network configuration applied
-[2024-01-15 10:30:21] VM ready for connections
-[2024-01-15 10:35:42] User session started
-[2024-01-15 10:35:45] Python 3.11 interpreter initialized
-[2024-01-15 10:36:01] Running LLM inference task...
-[2024-01-15 10:36:15] Task completed successfully`
-
-export function VMDetailPanel({ vm, onClose }: VMDetailPanelProps) {
+export function VMDetailPanel({
+  vm,
+  onClose,
+  onCreateSnapshot,
+  isSnapshotting,
+  latestSnapshotId,
+  canSnapshot,
+}: VMDetailPanelProps) {
   const [command, setCommand] = useState("")
   const [commandOutput, setCommandOutput] = useState<string[]>([])
-  const [uploadPath, setUploadPath] = useState("/home/user/")
+  const [uploadPath, setUploadPath] = useState("/workspace/")
   const [downloadPath, setDownloadPath] = useState("")
   const [isExecuting, setIsExecuting] = useState(false)
+  const [activeTab, setActiveTab] = useState("terminal")
+  const [logLines, setLogLines] = useState<string[]>([])
+  const [logError, setLogError] = useState<string | null>(null)
+  const [logsTruncated, setLogsTruncated] = useState(false)
+  const [logsUpdatedAt, setLogsUpdatedAt] = useState<string | null>(null)
+  const [logsLoading, setLogsLoading] = useState(false)
 
   const handleExecuteCommand = async () => {
     const trimmed = command.trim()
@@ -106,6 +120,33 @@ export function VMDetailPanel({ vm, onClose }: VMDetailPanelProps) {
       setIsExecuting(false)
     }
   }
+
+  useEffect(() => {
+    if (activeTab !== "logs") return
+    let cancelled = false
+    const loadLogs = async () => {
+      setLogsLoading(true)
+      setLogError(null)
+      try {
+        const data = await apiGetJson<LogsResponse>(`/v1/vms/${encodeURIComponent(vm.id)}/logs`)
+        if (cancelled) return
+        setLogLines(data.lines ?? [])
+        setLogsTruncated(Boolean(data.truncated))
+        setLogsUpdatedAt(data.updatedAt ?? null)
+      } catch (err: any) {
+        if (cancelled) return
+        setLogError(String(err?.message ?? err))
+      } finally {
+        if (!cancelled) setLogsLoading(false)
+      }
+    }
+    loadLogs()
+    const timer = setInterval(loadLogs, 5000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [activeTab, vm.id])
 
   return (
     <div className="w-96 bg-card border-l border-border flex flex-col">
@@ -149,14 +190,29 @@ export function VMDetailPanel({ vm, onClose }: VMDetailPanelProps) {
             <span>{new Date(vm.createdAt).toLocaleDateString()}</span>
           </div>
         </div>
-        {vm.snapshotId && (
-          <div className="text-xs text-muted-foreground">
-            <span className="text-foreground">Snapshot:</span> {vm.snapshotId}
+        {(vm.snapshotId || latestSnapshotId || isSnapshotting) && (
+          <div className="text-xs text-muted-foreground space-y-1">
+            {vm.snapshotId && (
+              <div>
+                <span className="text-foreground">Snapshot:</span> {vm.snapshotId}
+              </div>
+            )}
+            {latestSnapshotId && (
+              <div>
+                <span className="text-foreground">Last snapshot:</span> {latestSnapshotId}
+              </div>
+            )}
+            {isSnapshotting && (
+              <div className="flex items-center gap-2 text-warning">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>Creating snapshot…</span>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      <Tabs defaultValue="terminal" className="flex-1 flex flex-col">
+      <Tabs defaultValue="terminal" className="flex-1 flex flex-col" onValueChange={setActiveTab}>
         <TabsList className="mx-4 mt-4 bg-secondary">
           <TabsTrigger
             value="terminal"
@@ -215,8 +271,18 @@ export function VMDetailPanel({ vm, onClose }: VMDetailPanelProps) {
         </TabsContent>
 
         <TabsContent value="logs" className="flex-1 p-4 pt-2">
+          <div className="flex items-center justify-between text-xs text-muted-foreground mb-2">
+            <span>{logsUpdatedAt ? `Updated ${new Date(logsUpdatedAt).toLocaleTimeString()}` : "Logs"}</span>
+            {logsTruncated && <span>Showing latest lines</span>}
+          </div>
           <ScrollArea className="h-full bg-background rounded-md p-3 font-mono text-xs">
-            <pre className="text-muted-foreground whitespace-pre-wrap">{mockLogs}</pre>
+            {logError ? (
+              <div className="text-destructive">{logError}</div>
+            ) : logLines.length === 0 ? (
+              <span className="text-muted-foreground">{logsLoading ? "Loading logs..." : "No logs yet."}</span>
+            ) : (
+              <pre className="text-muted-foreground whitespace-pre-wrap">{logLines.join("\n")}</pre>
+            )}
           </ScrollArea>
         </TabsContent>
 
@@ -249,9 +315,14 @@ export function VMDetailPanel({ vm, onClose }: VMDetailPanelProps) {
               </Button>
             </div>
           </div>
-          <Button variant="outline" className="w-full border-border text-foreground hover:bg-secondary bg-transparent">
-            <Camera className="w-4 h-4 mr-2" />
-            Create Snapshot
+          <Button
+            variant="outline"
+            className="w-full border-border text-foreground hover:bg-secondary bg-transparent"
+            onClick={onCreateSnapshot}
+            disabled={!canSnapshot || isSnapshotting}
+          >
+            {isSnapshotting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Camera className="w-4 h-4 mr-2" />}
+            {isSnapshotting ? "Snapshotting…" : "Create Snapshot"}
           </Button>
         </TabsContent>
       </Tabs>

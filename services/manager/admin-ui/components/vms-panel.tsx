@@ -80,6 +80,10 @@ interface ApiVm {
   imageId?: string
 }
 
+interface SnapshotMeta {
+  id: string
+}
+
 export function VMsPanel() {
   const [vms, setVMs] = useState<VM[]>([])
   const [loading, setLoading] = useState(true)
@@ -93,6 +97,8 @@ export function VMsPanel() {
   const [vmToDelete, setVmToDelete] = useState<VM | null>(null)
   const [images, setImages] = useState<Array<{ id: string; name: string; isDefault?: boolean }>>([])
   const [pendingByVmId, setPendingByVmId] = useState<Record<string, "start" | "stop">>({})
+  const [snapshottingByVmId, setSnapshottingByVmId] = useState<Record<string, boolean>>({})
+  const [latestSnapshotByVmId, setLatestSnapshotByVmId] = useState<Record<string, string>>({})
 
   const filteredVMs = useMemo(
     () => vms.filter((vm) => vm.id.toLowerCase().includes(searchQuery.toLowerCase())),
@@ -166,6 +172,18 @@ export function VMsPanel() {
     })
   }, [])
 
+  useEffect(() => {
+    if (!selectedVM) return
+    const next = vms.find((vm) => vm.id === selectedVM.id)
+    if (!next) {
+      setSelectedVM(null)
+      return
+    }
+    if (next !== selectedVM) {
+      setSelectedVM(next)
+    }
+  }, [vms, selectedVM])
+
   const handleCreateVM = async () => {
     if (isCreating) return
     const allowIps = newVM.allowInternet ? ["0.0.0.0/0"] : []
@@ -223,6 +241,31 @@ export function VMsPanel() {
       await apiRequestJson("POST", `/v1/vms/${id}/start`)
     }
     await refresh()
+  }
+
+  const handleCreateSnapshot = async (vm: VM, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    if (snapshottingByVmId[vm.id]) return
+    if (vm.status !== "running") {
+      toast({ title: "Snapshot requires a running VM", description: "Start the VM before creating a snapshot." })
+      return
+    }
+    setSnapshottingByVmId((p) => ({ ...p, [vm.id]: true }))
+    try {
+      const snapshot = await apiRequestJson<SnapshotMeta>("POST", `/v1/vms/${encodeURIComponent(vm.id)}/snapshots`)
+      setLatestSnapshotByVmId((p) => ({ ...p, [vm.id]: snapshot.id }))
+      toast({ title: "Snapshot created", description: snapshot.id })
+    } catch (e: any) {
+      const msg = String(e?.message ?? e)
+      toast({ title: "Failed to create snapshot", description: msg })
+    } finally {
+      setSnapshottingByVmId((p) => {
+        if (!p[vm.id]) return p
+        const next = { ...p }
+        delete next[vm.id]
+        return next
+      })
+    }
   }
 
   const getStatusColor = (status: VM["status"]) => {
@@ -570,9 +613,16 @@ export function VMsPanel() {
                           <FileText className="w-4 h-4 mr-2" />
                           View Logs
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-popover-foreground hover:bg-secondary cursor-pointer">
-                          <Camera className="w-4 h-4 mr-2" />
-                          Create Snapshot
+                        <DropdownMenuItem
+                          className="text-popover-foreground hover:bg-secondary cursor-pointer"
+                          onSelect={(event) => {
+                            event.preventDefault()
+                            void handleCreateSnapshot(vm)
+                          }}
+                          disabled={vm.status !== "running" || Boolean(snapshottingByVmId[vm.id])}
+                        >
+                          {snapshottingByVmId[vm.id] ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Camera className="w-4 h-4 mr-2" />}
+                          {snapshottingByVmId[vm.id] ? "Snapshotting…" : "Create Snapshot"}
                         </DropdownMenuItem>
                         <DropdownMenuSeparator className="bg-border" />
                         <DropdownMenuItem className="text-popover-foreground hover:bg-secondary cursor-pointer">
@@ -593,7 +643,16 @@ export function VMsPanel() {
         </div>
       </div>
 
-      {selectedVM && <VMDetailPanel vm={selectedVM} onClose={() => setSelectedVM(null)} />}
+      {selectedVM && (
+        <VMDetailPanel
+          vm={selectedVM}
+          onClose={() => setSelectedVM(null)}
+          onCreateSnapshot={(e) => handleCreateSnapshot(selectedVM, e)}
+          isSnapshotting={Boolean(snapshottingByVmId[selectedVM.id])}
+          latestSnapshotId={latestSnapshotByVmId[selectedVM.id]}
+          canSnapshot={selectedVM.status === "running"}
+        />
+      )}
     </div>
   )
 }

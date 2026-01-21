@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { AgentClient, FirecrackerManager, NetworkManager, StorageProvider, VmStore } from "../types/interfaces.js";
 import type { VmCreateRequest, VmProvisionMode, VmPublic, VmRecord } from "../types/vm.js";
 import type { SnapshotMeta } from "../types/snapshot.js";
 import { HttpError } from "../api/httpErrors.js";
 import type { ActivityService } from "../telemetry/activityService.js";
 import type { ImageService } from "./imageService.js";
+
+const LOG_FILES = new Set(["firecracker.log", "firecracker.stdout.log", "firecracker.stderr.log"]);
 
 export interface VmServiceOptions {
   store: VmStore;
@@ -502,6 +505,60 @@ export class VmService {
     return result;
   }
 
+  async getLogs(
+    id: string,
+    input: { type?: string; tail?: number } = {}
+  ): Promise<{ type: string; lines: string[]; truncated: boolean; updatedAt?: string }> {
+    const vm = await this.requireVm(id);
+    const type = normalizeLogType(input.type);
+    const tail = clampTail(input.tail);
+    const logPath = path.join(vm.logsDir, type);
+    let stat: { size: number; mtime: Date } | null = null;
+
+    try {
+      const raw = await fs.stat(logPath);
+      stat = { size: raw.size, mtime: raw.mtime };
+    } catch (err: any) {
+      if (err?.code === "ENOENT") {
+        return { type, lines: [], truncated: false };
+      }
+      throw err;
+    }
+
+    if (!stat || stat.size === 0) {
+      return { type, lines: [], truncated: false, updatedAt: stat?.mtime?.toISOString() };
+    }
+
+    const maxBytes = 256 * 1024;
+    const readBytes = Math.min(stat.size, maxBytes);
+    const start = Math.max(0, stat.size - readBytes);
+    const handle = await fs.open(logPath, "r");
+    let text = "";
+    try {
+      const buffer = Buffer.alloc(readBytes);
+      await handle.read(buffer, 0, readBytes, start);
+      text = buffer.toString("utf-8");
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+
+    let lines = text.split(/\r?\n/);
+    if (start > 0 && lines.length > 0) {
+      lines = lines.slice(1);
+    }
+    if (lines.length > 0 && lines[lines.length - 1] === "") {
+      lines.pop();
+    }
+
+    let truncated = start > 0;
+    if (lines.length > tail) {
+      lines = lines.slice(-tail);
+      truncated = true;
+    }
+
+    return { type, lines, truncated, updatedAt: stat.mtime.toISOString() };
+  }
+
   async uploadFiles(id: string, dest: string, data: Buffer): Promise<void> {
     const vm = await this.requireVm(id);
     await this.agentClient.upload(vm.id, dest, data);
@@ -575,4 +632,19 @@ function generateMac(seed: string) {
   return Array.from(hash)
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join(":");
+}
+
+function normalizeLogType(type?: string): string {
+  const value = type ? String(type).trim() : "";
+  if (!value) return "firecracker.log";
+  if (!LOG_FILES.has(value)) {
+    throw new HttpError(400, "Invalid log type");
+  }
+  return value;
+}
+
+function clampTail(tail?: number): number {
+  const parsed = typeof tail === "number" && Number.isFinite(tail) ? Math.floor(tail) : 200;
+  if (parsed < 1) return 1;
+  return Math.min(parsed, 1000);
 }
