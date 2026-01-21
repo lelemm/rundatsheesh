@@ -56,6 +56,7 @@ RUN set -eux; \
     deno \
     git \
     musl-utils \
+    gcompat \
   ; \
   # Ensure apk leaves no cache inside the rootfs.
   rm -rf /rootfs/var/cache/apk/* || true
@@ -155,7 +156,37 @@ RUN set -eux; \
     for cmd in curl wget; do \
       stage_cmd "$cmd" || true; \
     done; \
-    chown -R 1000:1000 /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/usr/bin 2>/dev/null || true; \
+    # Stage gcompat (glibc compatibility layer) for NVM-installed Node.js binaries
+    # NVM downloads glibc-based Node.js binaries which need /lib/ld-linux-x86-64.so.2
+    if [ -e /rootfs/lib/ld-linux-x86-64.so.2 ]; then \
+      mkdir -p /rootfs/opt/sandbox/lib /rootfs/opt/sandbox/lib64; \
+      cp -aL /rootfs/lib/ld-linux-x86-64.so.2 /rootfs/opt/sandbox/lib/ld-linux-x86-64.so.2; \
+      ln -sf ../lib/ld-linux-x86-64.so.2 /rootfs/opt/sandbox/lib64/ld-linux-x86-64.so.2; \
+      echo "[bash]   staged: ld-linux-x86-64.so.2 (glibc loader shim)"; \
+    fi; \
+    # Stage libgcompat.so and its symlinks (libc.so.6, libcrypt.so.1, etc.)
+    for lib in /rootfs/lib/libgcompat.so*; do \
+      if [ -e "$lib" ]; then \
+        cp -aL "$lib" "/rootfs/opt/sandbox/lib/$(basename "$lib")"; \
+        echo "[bash]   staged: $(basename "$lib")"; \
+      fi; \
+    done; \
+    # Stage glibc compat symlinks (libc.so.6 -> libgcompat.so.0, etc.)
+    for link in libc.so.6 libcrypt.so.1 libpthread.so.0 librt.so.1 libm.so.6 libdl.so.2; do \
+      if [ -L "/rootfs/lib/$link" ]; then \
+        cp -a "/rootfs/lib/$link" "/rootfs/opt/sandbox/lib/$link"; \
+        echo "[bash]   staged: $link (gcompat symlink)"; \
+      fi; \
+    done; \
+    # Stage libobstack (required by some glibc programs)
+    for lib in /rootfs/usr/lib/libobstack.so*; do \
+      if [ -e "$lib" ]; then \
+        mkdir -p /rootfs/opt/sandbox/usr/lib; \
+        cp -aL "$lib" "/rootfs/opt/sandbox/usr/lib/$(basename "$lib")"; \
+        echo "[bash]   staged: $(basename "$lib")"; \
+      fi; \
+    done; \
+    chown -R 1000:1000 /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/usr/bin /rootfs/opt/sandbox/lib /rootfs/opt/sandbox/lib64 /rootfs/opt/sandbox/usr/lib 2>/dev/null || true; \
     echo "[bash] Bash sandbox ready"; \
   fi; \
   chown -R 1000:1000 /rootfs/home/user
