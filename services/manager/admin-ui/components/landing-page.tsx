@@ -236,11 +236,11 @@ docker compose up -d
               <span>Self-hosted • Open Source</span>
             </div>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-balance mb-6">
-              Run <span className="text-primary">Untrusted Code</span> on Your Infrastructure
+              Run <span className="text-primary">Untrusted, LLM-Generated Code</span> on Your Infrastructure
             </h1>
             <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-6 text-pretty">
-              A self-hosted REST API to spin up Firecracker microVMs, execute LLM-generated code in isolation, and
-              manage snapshots. Deploy on your own servers with full control.
+              A self-hosted API for running untrusted, LLM-generated code in isolated VMs, with snapshots and full
+              control over your environment.
             </p>
             <div className="max-w-2xl mx-auto mb-8 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
               <span className="font-semibold">Alpha warning:</span> This app is in an early alpha state and may be very
@@ -335,9 +335,9 @@ docker compose up -d
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
                 <Clock className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="font-semibold text-lg mb-2">Instant Provisioning</h3>
+              <h3 className="font-semibold text-lg mb-2">Provisioning You Can Rely On</h3>
               <p className="text-muted-foreground text-sm">
-                VMs boot in under 100ms. Your API calls return with a ready-to-use VM instantly.
+                Provision from prebuilt images so capacity is available on demand and stays consistent across runs.
               </p>
             </div>
 
