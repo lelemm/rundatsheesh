@@ -59,6 +59,7 @@ import {
 import { apiGetJson, apiRequestJson } from "@/lib/api"
 import { subscribeAdminEvents } from "@/lib/admin-events"
 import { toast } from "@/hooks/use-toast"
+import { CopyId } from "@/components/ui/copy-id"
 
 interface VM {
   id: string
@@ -546,7 +547,7 @@ export function VMsPanel() {
                     <div className={`w-2 h-2 rounded-full ${getStatusColor(vm.status)}`} />
                     <div>
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm font-medium text-foreground">{vm.id}</span>
+                        <CopyId value={vm.id} className="font-medium text-foreground" />
                         {getStatusBadge(vm.status)}
                       </div>
                       <div className="flex items-center gap-4 mt-1 text-xs text-muted-foreground">

@@ -8,6 +8,7 @@ import { Badge } from "@/components/ui/badge"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { Search, RefreshCw, MoreVertical, Play, Camera, Server, Layers, HardDrive } from "lucide-react"
 import { apiGetJson } from "@/lib/api"
+import { CopyId } from "@/components/ui/copy-id"
 
 interface Snapshot {
   id: string
@@ -123,10 +124,14 @@ export function SnapshotsPanel() {
                   <div>
                     <div className="flex items-center gap-2">
                       <Camera className="w-4 h-4 text-primary" />
-                      <span className="font-mono text-sm text-foreground">{snapshot.id}</span>
+                      <CopyId value={snapshot.id} className="text-foreground" />
                     </div>
                     <div className="flex items-center gap-4 mt-1 text-xs text-muted-foreground">
-                      {snapshot.sourceId && <span>Source: {snapshot.sourceId}</span>}
+                      {snapshot.sourceId && (
+                        <span className="flex items-center gap-1">
+                          Source: <CopyId value={snapshot.sourceId} className="text-xs" />
+                        </span>
+                      )}
                       {typeof snapshot.cpu === "number" && typeof snapshot.memMb === "number" && (
                         <span className="flex items-center gap-1">
                           <HardDrive className="w-3 h-3" />
@@ -177,10 +182,14 @@ export function SnapshotsPanel() {
                   <div>
                     <div className="flex items-center gap-2">
                       <Layers className="w-4 h-4 text-primary" />
-                      <span className="font-mono text-sm text-foreground">{snapshot.id}</span>
+                      <CopyId value={snapshot.id} className="text-foreground" />
                     </div>
                     <div className="flex items-center gap-4 mt-1 text-xs text-muted-foreground">
-                      {snapshot.sourceId && <span>Source: {snapshot.sourceId}</span>}
+                      {snapshot.sourceId && (
+                        <span className="flex items-center gap-1">
+                          Source: <CopyId value={snapshot.sourceId} className="text-xs" />
+                        </span>
+                      )}
                       {typeof snapshot.cpu === "number" && typeof snapshot.memMb === "number" && (
                         <span className="flex items-center gap-1">
                           <HardDrive className="w-3 h-3" />

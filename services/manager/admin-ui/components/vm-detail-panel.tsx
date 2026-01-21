@@ -32,6 +32,7 @@ import {
   CheckCircle2,
   Server,
 } from "lucide-react"
+import { CopyId } from "@/components/ui/copy-id"
 
 interface VM {
   id: string
@@ -265,7 +266,7 @@ export function VMDetailPanel({
       {/* Header */}
       <div className="p-4 border-b border-border flex items-center justify-between shrink-0">
         <div>
-          <h3 className="font-mono text-sm font-medium text-foreground">{vm.id}</h3>
+          <CopyId value={vm.id} className="font-medium text-foreground" />
           <Badge
             variant="outline"
             className={`mt-1 ${
@@ -318,13 +319,15 @@ export function VMDetailPanel({
         {(vm.snapshotId || latestSnapshotId || isSnapshotting) && (
           <div className="text-xs text-muted-foreground space-y-1">
             {vm.snapshotId && (
-              <div>
-                <span className="text-foreground">Snapshot:</span> {vm.snapshotId}
+              <div className="flex items-center gap-1">
+                <span className="text-foreground">Snapshot:</span>
+                <CopyId value={vm.snapshotId} className="text-xs" />
               </div>
             )}
             {latestSnapshotId && (
-              <div>
-                <span className="text-foreground">Last snapshot:</span> {latestSnapshotId}
+              <div className="flex items-center gap-1">
+                <span className="text-foreground">Last snapshot:</span>
+                <CopyId value={latestSnapshotId} className="text-xs" />
               </div>
             )}
             {isSnapshotting && (

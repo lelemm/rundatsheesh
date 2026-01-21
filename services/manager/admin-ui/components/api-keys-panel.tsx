@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Copy, Plus, RefreshCw, Trash2 } from "lucide-react"
 import { apiGetJson, apiRequestJson } from "@/lib/api"
+import { toast } from "@/hooks/use-toast"
 
 interface ApiKeyRecord {
   id: string
@@ -167,7 +168,10 @@ export function ApiKeysPanel() {
               <Button
                 variant="outline"
                 size="icon"
-                onClick={() => navigator.clipboard.writeText(justCreatedKey.apiKey!)}
+                onClick={() => {
+                  navigator.clipboard.writeText(justCreatedKey.apiKey!)
+                  toast({ title: "Copied to clipboard", description: "API key copied" })
+                }}
               >
                 <Copy className="w-4 h-4" />
               </Button>

@@ -28,6 +28,7 @@ import { Badge } from "@/components/ui/badge"
 import { apiGetJson, apiRequestJson, apiUploadBinaryWithProgress } from "@/lib/api"
 import { Plus, RefreshCw, Star, Trash2, Upload, Loader2 } from "lucide-react"
 import { toast } from "@/hooks/use-toast"
+import { CopyId } from "@/components/ui/copy-id"
 
 type GuestImage = {
   id: string
@@ -419,9 +420,10 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
                   {img.isDefault && <Badge variant="outline">Default</Badge>}
                 </CardTitle>
                 <p className="text-sm text-muted-foreground mt-1">{img.description}</p>
-                <p className="text-xs text-muted-foreground font-mono mt-2">
-                  {img.id} • rootfs {formatBytes(img.baseRootfsBytes)}
-                </p>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mt-2">
+                  <CopyId value={img.id} className="text-xs" />
+                  <span>• rootfs {formatBytes(img.baseRootfsBytes)}</span>
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <Button
