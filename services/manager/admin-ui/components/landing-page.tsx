@@ -48,39 +48,6 @@ export function LandingPage() {
   -H "X-API-Key: $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{}'`,
-    typescriptSdk: `import { RunDatSheesh } from "rundatsheesh";
-
-const client = new RunDatSheesh({ baseUrl: "http://localhost:3000" });
-
-// Create a VM
-const vm = await client.vms.create({ cpu: 1, memMb: 512, allowIps: [], diskSizeMb: 512 });
-
-// Run TypeScript inside the VM (Deno)
-const result = await client.vms.runTs(vm.id, { code: "console.log(2 + 2)" });
-console.log(result.stdout);
-
-// Clean up
-await client.vms.destroy(vm.id);`,
-    nodeSdk: `import { RunDatSheesh } from 'rundatsheesh';
-
-const client = new RunDatSheesh({ 
-  baseUrl: 'http://localhost:3000' 
-});
-
-// Create a VM from template
-const vm = await client.vms.create({ 
-  templateId: 'node-20' 
-});
-
-// Execute code
-const result = await vm.exec('node index.js');
-console.log(result.stdout);
-
-// Upload a file
-await vm.upload('/app/data.json', jsonBuffer);
-
-// Clean up
-await vm.delete();`,
     dockerInstall: `# Install via Docker Compose (recommended)
 
 # 1) Create .env
@@ -166,10 +133,20 @@ services:
       # - /dev/vsock:/dev/vsock
 YAML
 
-# 4) Start
+# 4) Download guest images from GitHub releases OR build them yourself
+# Option A: Download from releases (recommended)
+# Visit https://github.com/lelemm/rundatsheesh/releases
+# Download the guest image zip (e.g. alpine.zip) and extract to ./images/
+
+# Option B: Build from source (requires Docker)
+# git clone https://github.com/lelemm/rundatsheesh.git
+# cd rundatsheesh && ./scripts/build-guest-images.sh
+# cp -r dist/images/* ./images/
+
+# 5) Start
 docker compose up -d
 
-# 5) Open:
+# 6) Open:
 # - Admin UI: http://localhost:3000/login/
 # - Docs: http://localhost:3000/docs/
 # - Swagger: http://localhost:3000/swagger`,
@@ -289,7 +266,7 @@ docker compose up -d
               </div>
               <div className="border-t border-border px-4 py-3 bg-muted/10">
                 <p className="text-xs text-muted-foreground font-mono">
-                  <span className="text-success">200 OK</span> • Response time: 47ms • VM ready to execute
+                  <span className="text-success">200 OK</span> • VM ready to execute
                 </p>
               </div>
             </div>
@@ -434,12 +411,9 @@ docker compose up -d
           </div>
 
             <Tabs defaultValue="curl" className="max-w-4xl mx-auto">
-            <TabsList className="grid w-full grid-cols-2 mb-6">
+            <TabsList className="grid w-full grid-cols-1 mb-6">
               <TabsTrigger value="curl" className="gap-2">
                 <Code2 className="w-4 h-4" /> cURL
-              </TabsTrigger>
-              <TabsTrigger value="node" className="gap-2">
-                <Code2 className="w-4 h-4" /> TypeScript
               </TabsTrigger>
             </TabsList>
 
@@ -495,26 +469,6 @@ docker compose up -d
                 </div>
                 <pre className="p-4 font-mono text-sm overflow-x-auto text-muted-foreground">
                   <code>{codeExamples.createSnapshot}</code>
-                </pre>
-              </div>
-            </TabsContent>
-
-            <TabsContent value="node">
-              <div className="rounded-xl border border-border bg-card overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
-                  <span className="text-sm font-medium">TypeScript SDK</span>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={() => copyCode(codeExamples.typescriptSdk, "node")}
-                  >
-                    <Copy className={`w-3 h-3 mr-1 ${copied === "node" ? "text-success" : ""}`} />
-                    {copied === "node" ? "Copied!" : "Copy"}
-                  </Button>
-                </div>
-                <pre className="p-4 font-mono text-sm overflow-x-auto text-muted-foreground">
-                  <code>{codeExamples.typescriptSdk}</code>
                 </pre>
               </div>
             </TabsContent>
