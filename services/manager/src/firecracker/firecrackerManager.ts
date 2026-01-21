@@ -343,6 +343,9 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
 
     const outDir = path.join(jailRoot, "snapshot-out");
     await fs.mkdir(outDir, { recursive: true });
+    // Firecracker runs as an unprivileged uid/gid after jailer drops privileges.
+    // Make sure it can write snapshot files even if the manager created the dir as root.
+    await fs.chmod(outDir, 0o777).catch(() => undefined);
     const stateHost = path.join(outDir, "vmstate.snap");
     const memHost = path.join(outDir, "mem.snap");
 
