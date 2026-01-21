@@ -66,8 +66,10 @@ export async function runInJailShell(
   const cwd = normalizeWorkspaceCwd(opts.cwdInWorkspace);
 
   if (JAIL_SHELL === "bash") {
-    // Bash: source .bashrc for NVM support, then run command
-    const script = `source ~/.bashrc 2>/dev/null || true; cd ${shellQuoteSingle(cwd)} && ${cmd}`;
+    // Bash: source /etc/skel/.bashrc for NVM support, then run command.
+    // NOTE: We use /etc/skel/.bashrc (baked into the image) instead of ~/.bashrc
+    // because /home/user is bind-mounted at runtime and would override any image .bashrc.
+    const script = `source /etc/skel/.bashrc 2>/dev/null || true; cd ${shellQuoteSingle(cwd)} && ${cmd}`;
     return runRootCommand(["chroot", buildChrootArgs("/bin/bash", ["-c", script])], {
       env: buildJailEnv(opts.env),
       timeoutMs: opts.timeoutMs,

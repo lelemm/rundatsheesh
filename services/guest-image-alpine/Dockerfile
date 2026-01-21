@@ -220,24 +220,32 @@ RUN set -eux; \
   if [ ! -e /rootfs/home/user/.deno/bin/deno ]; then ln -s /usr/bin/deno /rootfs/home/user/.deno/bin/deno; fi; \
   chown -R 1000:1000 /rootfs/home/user/.deno
 
-# For bash variant: install NVM and create .bashrc with NVM initialization
+# For bash variant: install NVM to a fixed location in the sandbox
+# NOTE: /home/user inside the sandbox is bind-mounted from the real /home/user at runtime,
+# so we can't put NVM or .bashrc there in the image. Instead:
+# - NVM scripts go to /opt/sandbox/opt/nvm (persistent in image)
+# - NVM_DIR is set to /workspace/.nvm (so installed versions persist in /home/user/.nvm)
+# - .bashrc goes to /opt/sandbox/etc/skel/.bashrc (sourced by jail.ts)
 ARG SHELL_VARIANT
 RUN set -eux; \
   if [ "$SHELL_VARIANT" = "bash" ]; then \
     echo "[bash] Installing NVM for bash variant..."; \
-    # Download and extract NVM directly (avoid git clone which requires network in chroot)
+    # Download and extract NVM to /opt/sandbox/opt/nvm (fixed location in image)
     NVM_VERSION="v0.40.1"; \
-    mkdir -p /rootfs/home/user/.nvm; \
+    mkdir -p /rootfs/opt/sandbox/opt/nvm; \
     curl -L "https://github.com/nvm-sh/nvm/archive/refs/tags/${NVM_VERSION}.tar.gz" | \
-      tar -xz -C /rootfs/home/user/.nvm --strip-components=1; \
-    chown -R 1000:1000 /rootfs/home/user/.nvm; \
-    # Create .bashrc with NVM initialization
+      tar -xz -C /rootfs/opt/sandbox/opt/nvm --strip-components=1; \
+    chown -R 1000:1000 /rootfs/opt/sandbox/opt/nvm; \
+    # Create .bashrc at /opt/sandbox/etc/skel/.bashrc (sourced by jail.ts for bash variant)
+    # NVM_DIR=/workspace/.nvm ensures installed Node versions persist across exec calls
+    # (since /workspace is bind-mounted from the real /home/user)
+    mkdir -p /rootfs/opt/sandbox/etc/skel; \
     printf '%s\n' \
-      'export NVM_DIR="$HOME/.nvm"' \
-      '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' \
-      > /rootfs/home/user/.bashrc; \
-    chown 1000:1000 /rootfs/home/user/.bashrc; \
-    echo "[bash] NVM installed successfully"; \
+      'export NVM_DIR="/workspace/.nvm"' \
+      '[ -s "/opt/nvm/nvm.sh" ] && . "/opt/nvm/nvm.sh"' \
+      > /rootfs/opt/sandbox/etc/skel/.bashrc; \
+    chmod 644 /rootfs/opt/sandbox/etc/skel/.bashrc; \
+    echo "[bash] NVM installed successfully at /opt/nvm, NVM_DIR=/workspace/.nvm"; \
   fi
 
 # Stage git into /opt/sandbox so `exec` (which chroots to /opt/sandbox) can run it.
