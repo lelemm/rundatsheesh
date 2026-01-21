@@ -332,7 +332,7 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
       mem_file_path: inChrootPathForHostPath(jailRoot, memHost)
     });
 
-    await this.request(apiSockHost, "PUT", "/actions", { action_type: "Resume" });
+    await this.request(apiSockHost, "PATCH", "/vm", { state: "Resumed" });
   }
 
   async createSnapshot(vm: VmRecord, snapshot: { memPath: string; statePath: string }): Promise<void> {
@@ -346,13 +346,13 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
     const stateHost = path.join(outDir, "vmstate.snap");
     const memHost = path.join(outDir, "mem.snap");
 
-    await this.request(apiSockHost, "PUT", "/actions", { action_type: "Pause" });
+    await this.request(apiSockHost, "PATCH", "/vm", { state: "Paused" });
     await this.request(apiSockHost, "PUT", "/snapshot/create", {
       snapshot_type: "Full",
       snapshot_path: inChrootPathForHostPath(jailRoot, stateHost),
       mem_file_path: inChrootPathForHostPath(jailRoot, memHost)
     });
-    await this.request(apiSockHost, "PUT", "/actions", { action_type: "Resume" });
+    await this.request(apiSockHost, "PATCH", "/vm", { state: "Resumed" });
 
     // Copy the snapshot artifacts out of the jail root into the requested storage paths.
     await fs.copyFile(stateHost, snapshot.statePath);
