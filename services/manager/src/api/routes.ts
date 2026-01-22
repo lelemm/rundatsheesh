@@ -5,6 +5,7 @@ import { BodyTooLargeError, readStreamToBuffer, writeStreamToFile } from "../uti
 import { HttpError } from "./httpErrors.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import AdmZip from "adm-zip";
 
 export interface ApiPluginOptions {
   deps: AppDeps;
@@ -218,6 +219,75 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
           entityId: id,
           message: "Image rootfs uploaded",
           meta: { imageId: id, filename: "rootfs.ext4" }
+        })
+        .catch(() => undefined);
+      reply.code(204);
+      return;
+    }
+  );
+
+  app.put(
+    "/v1/images/:id/bundle",
+    {
+      bodyLimit: BODY_LIMITS.imageBinary,
+      schema: {
+        summary: "Upload zip bundle (vmlinux + rootfs.ext4)",
+        description: "Upload a zip file containing both vmlinux and rootfs.ext4 files",
+        tags: ["images"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+        response: { 204: { type: "null" }, 400: ERROR_RESPONSE, 404: ERROR_RESPONSE }
+      }
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const img = await opts.deps.images.getById(id);
+      if (!img) {
+        reply.code(404);
+        return { message: "Image not found" };
+      }
+      const dir = opts.deps.images.imageDirForId(id);
+      await fs.mkdir(dir, { recursive: true });
+
+      // Read the zip into a buffer
+      const bodyStream = request.body as any;
+      const zipBuffer = await readStreamToBuffer(bodyStream, BODY_LIMITS.imageBinary);
+
+      // Extract and validate the zip
+      const zip = new AdmZip(zipBuffer);
+      const entries = zip.getEntries();
+      
+      const kernelEntry = entries.find(e => e.entryName === "vmlinux" || e.entryName.endsWith("/vmlinux"));
+      const rootfsEntry = entries.find(e => e.entryName === "rootfs.ext4" || e.entryName.endsWith("/rootfs.ext4"));
+
+      if (!kernelEntry && !rootfsEntry) {
+        reply.code(400);
+        return { message: "Zip must contain vmlinux and/or rootfs.ext4" };
+      }
+
+      // Extract files
+      if (kernelEntry) {
+        const kernelData = kernelEntry.getData();
+        await fs.writeFile(path.join(dir, "vmlinux"), kernelData);
+        await opts.deps.images.markKernelUploaded(id, "vmlinux");
+      }
+
+      if (rootfsEntry) {
+        const rootfsData = rootfsEntry.getData();
+        await fs.writeFile(path.join(dir, "rootfs.ext4"), rootfsData);
+        await opts.deps.images.markRootfsUploaded(id, "rootfs.ext4");
+      }
+
+      await opts.deps.activityService
+        ?.logEvent({
+          type: "image.bundle_uploaded",
+          entityType: "image",
+          entityId: id,
+          message: "Image bundle uploaded",
+          meta: { 
+            imageId: id, 
+            hasKernel: !!kernelEntry,
+            hasRootfs: !!rootfsEntry
+          }
         })
         .catch(() => undefined);
       reply.code(204);

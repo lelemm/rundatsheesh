@@ -402,31 +402,89 @@ export class VmService {
 
   async start(id: string): Promise<void> {
     const vm = await this.requireVm(id);
+    if (vm.state !== "STOPPED") {
+      throw new HttpError(409, `VM must be STOPPED to start (state=${vm.state})`);
+    }
     await this.store.update(vm.id, { state: "STARTING" });
-    await this.network.configure(vm, vm.tapName);
-    const tFirecrackerStart = Date.now();
-    await this.firecracker.createAndStart(vm, vm.rootfsPath, vm.kernelPath, vm.tapName);
-    const firecrackerMs = Date.now() - tFirecrackerStart;
-    const tAgentHealthStart = Date.now();
-    await this.agentClient.health(vm.id);
-    const agentHealthMs = Date.now() - tAgentHealthStart;
-        await this.agentClient.syncTime(vm.id, { unixTimeMs: Date.now() }).catch(() => undefined);
-    await this.agentClient.applyAllowlist(vm.id, vm.allowIps, vm.outboundInternet);
-    await this.store.update(vm.id, { state: "RUNNING", provisionMode: "boot" });
-    await this.activity?.logEvent({
-      type: "vm.started",
-      entityType: "vm",
-      entityId: vm.id,
-      message: "VM started",
-      meta: { mode: "boot" }
-    });
-    // eslint-disable-next-line no-console
-    console.info("[vm-start]", { vmId: vm.id, firecrackerMs, agentHealthMs });
+
+    try {
+      // Re-prepare VM storage since the jailer directory was cleaned up when the VM was stopped.
+      // Use the persistent disk (saved during stop) to preserve user data.
+      const tStorageStart = Date.now();
+      const image = await this.images.resolveForVmCreate(vm.imageId ?? undefined);
+      const persistentDiskPath = this.storage.persistentDiskPath(vm.id);
+      let storageResult: { rootfsPath: string; logsDir: string; kernelPath: string };
+
+      if (await this.storage.hasPersistentDisk(vm.id)) {
+        // Use the persistent disk which has user data from before stop.
+        // No need to specify diskSizeBytes - the disk already has its size from creation.
+        storageResult = await this.storage.prepareVmStorageFromDisk(vm.id, {
+          kernelSrcPath: image.kernelSrcPath,
+          diskSrcPath: persistentDiskPath
+        });
+      } else {
+        // Fallback: no persistent disk, use base image (this shouldn't happen normally)
+        // eslint-disable-next-line no-console
+        console.warn("[vm-start] No persistent disk found, using base image (user data will be lost)", { vmId: vm.id });
+        storageResult = await this.storage.prepareVmStorage(vm.id, {
+          kernelSrcPath: image.kernelSrcPath,
+          baseRootfsPath: image.baseRootfsPath
+        });
+      }
+      const storageMs = Date.now() - tStorageStart;
+
+      // Update VM record with new paths
+      await this.store.update(vm.id, {
+        rootfsPath: storageResult.rootfsPath,
+        kernelPath: storageResult.kernelPath,
+        logsDir: storageResult.logsDir
+      });
+
+      // Fetch updated VM record
+      const updatedVm = await this.store.get(vm.id);
+      if (!updatedVm) throw new HttpError(404, "VM not found after update");
+
+      await this.network.configure(updatedVm, updatedVm.tapName);
+      const tFirecrackerStart = Date.now();
+      await this.firecracker.createAndStart(updatedVm, updatedVm.rootfsPath, updatedVm.kernelPath, updatedVm.tapName);
+      const firecrackerMs = Date.now() - tFirecrackerStart;
+      const tAgentHealthStart = Date.now();
+      await this.agentClient.health(updatedVm.id);
+      const agentHealthMs = Date.now() - tAgentHealthStart;
+      await this.agentClient.syncTime(updatedVm.id, { unixTimeMs: Date.now() }).catch(() => undefined);
+      await this.agentClient.applyAllowlist(updatedVm.id, updatedVm.allowIps, updatedVm.outboundInternet);
+      await this.store.update(updatedVm.id, { state: "RUNNING", provisionMode: "boot" });
+      await this.activity?.logEvent({
+        type: "vm.started",
+        entityType: "vm",
+        entityId: updatedVm.id,
+        message: "VM started",
+        meta: { mode: "boot" }
+      });
+      // eslint-disable-next-line no-console
+      console.info("[vm-start]", { vmId: updatedVm.id, storageMs, firecrackerMs, agentHealthMs });
+    } catch (error) {
+      await this.store.update(vm.id, { state: "ERROR" });
+      throw error;
+    }
   }
 
   async stop(id: string): Promise<void> {
     const vm = await this.requireVm(id);
+    if (vm.state !== "RUNNING") {
+      throw new HttpError(409, `VM must be RUNNING to stop (state=${vm.state})`);
+    }
     await this.store.update(vm.id, { state: "STOPPING" });
+
+    // Best-effort filesystem sync before stopping
+    await this.agentClient.exec(vm.id, { cmd: "sync" }).catch(() => undefined);
+
+    // Save the rootfs to persistent storage before firecracker.stop() cleans up the jailer directory.
+    // This preserves user data across stop/start cycles.
+    const tSaveStart = Date.now();
+    await this.storage.saveDiskToPersistent(vm.id, vm.rootfsPath);
+    const saveMs = Date.now() - tSaveStart;
+
     await this.firecracker.stop(vm);
     // Tear down host networking so a later `start` can recreate the tap cleanly.
     await this.network.teardown(vm, vm.tapName).catch(() => undefined);
@@ -437,6 +495,8 @@ export class VmService {
       entityId: vm.id,
       message: "VM stopped"
     });
+    // eslint-disable-next-line no-console
+    console.info("[vm-stop]", { vmId: vm.id, saveMs });
   }
 
   async destroy(id: string): Promise<void> {

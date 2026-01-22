@@ -36,6 +36,13 @@
       "when": 1768771724219,
       "tag": "0004_fluffy_warlock",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1769091739866,
+      "tag": "0005_brainy_kitty_pryde",
+      "breakpoints": true
     }
   ]
 }

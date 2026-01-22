@@ -1350,78 +1350,90 @@ result.set({
     expect(readResultsRes.stdout).toContain("filtered");
   });
 
-  it("real-world: VM stop and verify operations fail on stopped VM", async () => {
-    // Test VM stop functionality - verifies that:
+  it("real-world: VM power cycle (stop and start)", async () => {
+    // Test the full VM power cycle: stop a running VM, then start it again
+    // This verifies that:
     // 1. A running VM can be stopped
-    // 2. Operations correctly fail on a stopped VM
-    // Note: VM restart (start after stop) may not be supported in all environments
-    // due to Firecracker jailer limitations
+    // 2. Operations fail on a stopped VM
+    // 3. A stopped VM can be started again
+    // 4. Data persists across the power cycle
     
     // Step 1: Create a fresh VM for this test
     const vm = await createVm({ cpu: 1, memMb: 256, allowIps: ["0.0.0.0/0"], outboundInternet: true });
     // eslint-disable-next-line no-console
-    console.info("[it] vm-stop: VM created", { vmId: vm.id, state: vm.state });
+    console.info("[it] power-cycle: VM created", { vmId: vm.id, state: vm.state });
     
     try {
-      // Step 2: Verify VM is initially running (API returns uppercase state)
+      // Step 2: Verify VM is initially running
       expect(vm.state.toUpperCase()).toBe("RUNNING");
       
       // Step 3: Execute a command to verify VM is responsive
       const preStopExec = await vmExec(vm.id, "echo 'VM is alive'");
       // eslint-disable-next-line no-console
-      console.info("[it] vm-stop: pre-stop exec", { exitCode: preStopExec.exitCode, stdout: preStopExec.stdout });
+      console.info("[it] power-cycle: pre-stop exec", { exitCode: preStopExec.exitCode, stdout: preStopExec.stdout });
       expect(preStopExec.exitCode).toBe(0);
       expect(preStopExec.stdout.trim()).toBe("VM is alive");
       
-      // Step 4: Create a marker file to prove VM was working
-      const markerContent = `vm-stop-test-${Date.now()}`;
-      const createMarker = await vmExec(vm.id, `echo '${markerContent}' > /workspace/stop-marker.txt`);
+      // Step 4: Create a marker file to test persistence across power cycle
+      const markerContent = `power-cycle-test-${Date.now()}`;
+      const createMarker = await vmExec(vm.id, `echo '${markerContent}' > /workspace/power-cycle-marker.txt`);
       // eslint-disable-next-line no-console
-      console.info("[it] vm-stop: create marker file", { exitCode: createMarker.exitCode });
+      console.info("[it] power-cycle: create marker file", { exitCode: createMarker.exitCode });
       expect(createMarker.exitCode).toBe(0);
       
       // Step 5: Stop the VM
       // eslint-disable-next-line no-console
-      console.info("[it] vm-stop: stopping VM...");
+      console.info("[it] power-cycle: stopping VM...");
       await stopVm(vm.id);
       
       // Step 6: Wait for VM to be stopped
       const stoppedVm = await waitForVmState(vm.id, "STOPPED", 30000);
       // eslint-disable-next-line no-console
-      console.info("[it] vm-stop: VM stopped", { vmId: stoppedVm.id, state: stoppedVm.state });
+      console.info("[it] power-cycle: VM stopped", { vmId: stoppedVm.id, state: stoppedVm.state });
       expect(stoppedVm.state.toUpperCase()).toBe("STOPPED");
       
-      // Step 7: Verify exec fails on stopped VM (should return error status)
+      // Step 7: Verify exec fails on stopped VM
       const { status: execOnStoppedStatus } = await apiJson<ExecResult>(
         "POST",
         `${MANAGER_BASE}/v1/vms/${vm.id}/exec`,
         { cmd: "echo test" }
       );
       // eslint-disable-next-line no-console
-      console.info("[it] vm-stop: exec on stopped VM", { status: execOnStoppedStatus });
-      // Should fail with 4xx or 5xx (VM not running)
+      console.info("[it] power-cycle: exec on stopped VM", { status: execOnStoppedStatus });
       expect(execOnStoppedStatus).toBeGreaterThanOrEqual(400);
       
-      // Step 8: Verify run-ts also fails on stopped VM
-      const { status: runTsOnStoppedStatus } = await apiJson<ExecResult>(
-        "POST",
-        `${MANAGER_BASE}/v1/vms/${vm.id}/run-ts`,
-        { code: "console.log('test')" }
-      );
+      // Step 8: Start the VM again
       // eslint-disable-next-line no-console
-      console.info("[it] vm-stop: run-ts on stopped VM", { status: runTsOnStoppedStatus });
-      expect(runTsOnStoppedStatus).toBeGreaterThanOrEqual(400);
+      console.info("[it] power-cycle: starting VM...");
+      await startVm(vm.id);
       
-      // Step 9: Verify GET /vm/:id still works and shows stopped state
-      const vmInfo = await getVm(vm.id);
+      // Step 9: Wait for VM to be running again
+      const runningVm = await waitForVmState(vm.id, "RUNNING", 60000);
       // eslint-disable-next-line no-console
-      console.info("[it] vm-stop: final VM state", { vmId: vmInfo.id, state: vmInfo.state });
-      expect(vmInfo.state.toUpperCase()).toBe("STOPPED");
+      console.info("[it] power-cycle: VM started", { vmId: runningVm.id, state: runningVm.state });
+      expect(runningVm.state.toUpperCase()).toBe("RUNNING");
+      
+      // Step 10: Wait for guest agent to be ready
+      await delay(3000);
+      
+      // Step 11: Verify VM is responsive after restart
+      const postStartExec = await vmExec(vm.id, "echo 'VM is alive after restart'");
+      // eslint-disable-next-line no-console
+      console.info("[it] power-cycle: post-start exec", { exitCode: postStartExec.exitCode, stdout: postStartExec.stdout });
+      expect(postStartExec.exitCode).toBe(0);
+      expect(postStartExec.stdout.trim()).toBe("VM is alive after restart");
+      
+      // Step 12: Verify the marker file persisted across power cycle
+      const readMarker = await vmExec(vm.id, "cat /workspace/power-cycle-marker.txt");
+      // eslint-disable-next-line no-console
+      console.info("[it] power-cycle: read marker file", { exitCode: readMarker.exitCode, stdout: readMarker.stdout });
+      expect(readMarker.exitCode).toBe(0);
+      expect(readMarker.stdout.trim()).toBe(markerContent);
       
     } finally {
       // Cleanup: delete the VM
       await deleteVm(vm.id);
     }
-  }, 60_000); // 1 minute timeout for stop operations
+  }, 120_000); // 2 minute timeout for power cycle operations
 });
 

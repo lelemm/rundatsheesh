@@ -365,6 +365,20 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
   async stop(vm: VmRecord): Promise<void> {
     const apiSockHost = firecrackerApiSocketPath(this.options.jailerChrootBaseDir, vm.id);
     await this.request(apiSockHost, "PUT", "/actions", { action_type: "SendCtrlAltDel" }).catch(() => undefined);
+    
+    // Wait a moment for the VM to shut down gracefully
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    
+    // Kill the jailer/firecracker process if it's still running
+    const proc = this.processes.get(vm.id);
+    if (proc) {
+      proc.kill("SIGTERM");
+      this.processes.delete(vm.id);
+    }
+    
+    // Clean up the jailer directory so a subsequent `start` can recreate it cleanly.
+    // The VM's rootfs and kernel are stored separately (in STORAGE_ROOT/vms) and are not affected.
+    await fs.rm(jailerVmDir(this.options.jailerChrootBaseDir, vm.id), { recursive: true, force: true });
   }
 
   async destroy(vm: VmRecord): Promise<void> {

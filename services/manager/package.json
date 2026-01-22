@@ -16,14 +16,15 @@
   },
   "dependencies": {
     "@fastify/cookie": "^9.4.0",
-    "@fastify/static": "^6.12.0",
     "@fastify/rate-limit": "^9.0.0",
+    "@fastify/static": "^6.12.0",
     "@fastify/swagger": "^8.15.0",
     "@fastify/swagger-ui": "^3.1.0",
     "@opentelemetry/auto-instrumentations-node": "^0.68.0",
     "@opentelemetry/exporter-trace-otlp-http": "^0.210.0",
     "@opentelemetry/resources": "^2.4.0",
     "@opentelemetry/sdk-node": "^0.210.0",
+    "adm-zip": "^0.5.16",
     "better-sqlite3": "^11.7.0",
     "drizzle-orm": "^0.44.0",
     "fastify": "^4.26.2",
@@ -32,11 +33,12 @@
     "pg": "^8.13.1"
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.1",
     "@types/pg": "^8.11.11",
-    "ts-node": "^10.9.2",
     "drizzle-kit": "^0.31.0",
+    "ts-node": "^10.9.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

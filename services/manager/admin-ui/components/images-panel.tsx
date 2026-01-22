@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { apiGetJson, apiRequestJson, apiUploadBinaryWithProgress } from "@/lib/api"
-import { Plus, RefreshCw, Star, Trash2, Upload, Loader2 } from "lucide-react"
+import { Plus, RefreshCw, Star, Trash2, Upload, Loader2, Archive, FileCode } from "lucide-react"
 import { toast } from "@/hooks/use-toast"
 import { CopyId } from "@/components/ui/copy-id"
 
@@ -38,6 +38,8 @@ type GuestImage = {
   kernelFilename?: string | null
   rootfsFilename?: string | null
   baseRootfsBytes?: number | null
+  kernelUploadedAt?: string | null
+  rootfsUploadedAt?: string | null
   isDefault?: boolean
   hasKernel?: boolean
   hasRootfs?: boolean
@@ -58,6 +60,13 @@ function formatProgress(p: UploadProgress | null): string {
   const pct = Math.round(p.pct ?? 0)
   if (!p.total) return `${formatBytes(p.loaded)} • ${pct}%`
   return `${formatBytes(p.loaded)} / ${formatBytes(p.total)} • ${pct}%`
+}
+
+function formatUploadedAt(isoDate: string | null | undefined): string {
+  if (!isoDate) return "Uploaded"
+  const date = new Date(isoDate)
+  if (isNaN(date.getTime())) return "Uploaded"
+  return `Uploaded ${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
 }
 
 function FilePickButton(props: {
@@ -106,10 +115,13 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
   const [isCreating, setIsCreating] = useState(false)
   const [newName, setNewName] = useState("")
   const [newDescription, setNewDescription] = useState("")
+  const [uploadMode, setUploadMode] = useState<"separate" | "bundle">("separate")
   const [newKernelFile, setNewKernelFile] = useState<File | null>(null)
   const [newRootfsFile, setNewRootfsFile] = useState<File | null>(null)
+  const [newBundleFile, setNewBundleFile] = useState<File | null>(null)
   const [createKernelProgress, setCreateKernelProgress] = useState<UploadProgress | null>(null)
   const [createRootfsProgress, setCreateRootfsProgress] = useState<UploadProgress | null>(null)
+  const [createBundleProgress, setCreateBundleProgress] = useState<UploadProgress | null>(null)
   const [uploadPctByKey, setUploadPctByKey] = useState<Record<string, number | null>>({})
   const [deleteTarget, setDeleteTarget] = useState<GuestImage | null>(null)
 
@@ -117,8 +129,9 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
     if (isCreating) return true
     if (createKernelProgress !== null) return true
     if (createRootfsProgress !== null) return true
+    if (createBundleProgress !== null) return true
     return Object.values(uploadPctByKey).some((v) => v !== null && v !== undefined)
-  }, [createKernelProgress, createRootfsProgress, isCreating, uploadPctByKey])
+  }, [createKernelProgress, createRootfsProgress, createBundleProgress, isCreating, uploadPctByKey])
 
   // Notify parent shell so it can block navigation during uploads.
   // (Also ensures the flag is reset on unmount.)
@@ -156,34 +169,52 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
     setIsCreating(true)
     try {
       const created = await apiRequestJson<GuestImage>("POST", "/v1/images", { name, description })
-      if (newKernelFile) {
-        setCreateKernelProgress({ loaded: 0, total: newKernelFile.size ?? null, pct: 0 })
+      
+      if (uploadMode === "bundle" && newBundleFile) {
+        // Upload zip bundle
+        setCreateBundleProgress({ loaded: 0, total: newBundleFile.size ?? null, pct: 0 })
         await apiUploadBinaryWithProgress({
           method: "PUT",
-          path: `/v1/images/${encodeURIComponent(created.id)}/kernel`,
-          data: newKernelFile,
-          contentType: "application/octet-stream",
-          onProgress: (p) => setCreateKernelProgress(p),
+          path: `/v1/images/${encodeURIComponent(created.id)}/bundle`,
+          data: newBundleFile,
+          contentType: "application/zip",
+          onProgress: (p) => setCreateBundleProgress(p),
         })
+      } else {
+        // Upload separate files
+        if (newKernelFile) {
+          setCreateKernelProgress({ loaded: 0, total: newKernelFile.size ?? null, pct: 0 })
+          await apiUploadBinaryWithProgress({
+            method: "PUT",
+            path: `/v1/images/${encodeURIComponent(created.id)}/kernel`,
+            data: newKernelFile,
+            contentType: "application/octet-stream",
+            onProgress: (p) => setCreateKernelProgress(p),
+          })
+        }
+        if (newRootfsFile) {
+          setCreateRootfsProgress({ loaded: 0, total: newRootfsFile.size ?? null, pct: 0 })
+          await apiUploadBinaryWithProgress({
+            method: "PUT",
+            path: `/v1/images/${encodeURIComponent(created.id)}/rootfs`,
+            data: newRootfsFile,
+            contentType: "application/octet-stream",
+            onProgress: (p) => setCreateRootfsProgress(p),
+          })
+        }
       }
-      if (newRootfsFile) {
-        setCreateRootfsProgress({ loaded: 0, total: newRootfsFile.size ?? null, pct: 0 })
-        await apiUploadBinaryWithProgress({
-          method: "PUT",
-          path: `/v1/images/${encodeURIComponent(created.id)}/rootfs`,
-          data: newRootfsFile,
-          contentType: "application/octet-stream",
-          onProgress: (p) => setCreateRootfsProgress(p),
-        })
-      }
+      
       toast({ title: "Image created" })
       setCreateOpen(false)
       setNewName("")
       setNewDescription("")
+      setUploadMode("separate")
       setNewKernelFile(null)
       setNewRootfsFile(null)
+      setNewBundleFile(null)
       setCreateKernelProgress(null)
       setCreateRootfsProgress(null)
+      setCreateBundleProgress(null)
       await refresh()
     } catch (e: any) {
       const msg = String(e?.message ?? e)
@@ -191,6 +222,7 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
       toast({ title: "Failed to create image", description: msg })
       setCreateKernelProgress(null)
       setCreateRootfsProgress(null)
+      setCreateBundleProgress(null)
     } finally {
       setIsCreating(false)
     }
@@ -281,7 +313,15 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
             onOpenChange={(open) => {
               if (isCreating) return
               setCreateOpen(open)
-              if (open) setCreateError(null)
+              if (open) {
+                setCreateError(null)
+              } else {
+                // Reset state when closing
+                setUploadMode("separate")
+                setNewKernelFile(null)
+                setNewRootfsFile(null)
+                setNewBundleFile(null)
+              }
             }}
           >
             <DialogTrigger asChild>
@@ -335,40 +375,108 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
                     disabled={isCreating}
                   />
                 </div>
+                {/* Upload mode selector */}
                 <div className="space-y-2">
-                  <Label className="text-foreground">Kernel (vmlinux)</Label>
-                  <FilePickButton
-                    disabled={isCreating}
-                    buttonText="Choose kernel file"
-                    onFile={setNewKernelFile}
-                    selectedName={newKernelFile?.name ?? null}
-                  />
-                  {createKernelProgress !== null && (
-                    <div className="w-full">
-                      <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                        <div className="h-full bg-primary rounded-full" style={{ width: `${createKernelProgress.pct ?? 0}%` }} />
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-1">Uploading kernel… {formatProgress(createKernelProgress)}</div>
-                    </div>
-                  )}
+                  <Label className="text-foreground">Upload files</Label>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      variant={uploadMode === "separate" ? "default" : "outline"}
+                      size="sm"
+                      className={uploadMode === "separate" 
+                        ? "bg-primary text-primary-foreground" 
+                        : "border-border text-foreground hover:bg-secondary bg-transparent"
+                      }
+                      disabled={isCreating}
+                      onClick={() => {
+                        setUploadMode("separate")
+                        setNewBundleFile(null)
+                      }}
+                    >
+                      <FileCode className="w-4 h-4 mr-2" />
+                      Separate files
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={uploadMode === "bundle" ? "default" : "outline"}
+                      size="sm"
+                      className={uploadMode === "bundle" 
+                        ? "bg-primary text-primary-foreground" 
+                        : "border-border text-foreground hover:bg-secondary bg-transparent"
+                      }
+                      disabled={isCreating}
+                      onClick={() => {
+                        setUploadMode("bundle")
+                        setNewKernelFile(null)
+                        setNewRootfsFile(null)
+                      }}
+                    >
+                      <Archive className="w-4 h-4 mr-2" />
+                      Zip bundle
+                    </Button>
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-foreground">Rootfs (rootfs.ext4)</Label>
-                  <FilePickButton
-                    disabled={isCreating}
-                    buttonText="Choose rootfs file"
-                    onFile={setNewRootfsFile}
-                    selectedName={newRootfsFile?.name ?? null}
-                  />
-                  {createRootfsProgress !== null && (
-                    <div className="w-full">
-                      <div className="h-2 bg-secondary rounded-full overflow-hidden">
-                        <div className="h-full bg-primary rounded-full" style={{ width: `${createRootfsProgress.pct ?? 0}%` }} />
-                      </div>
-                      <div className="text-xs text-muted-foreground mt-1">Uploading rootfs… {formatProgress(createRootfsProgress)}</div>
+
+                {uploadMode === "separate" ? (
+                  <>
+                    <div className="space-y-2">
+                      <Label className="text-foreground">Kernel (vmlinux)</Label>
+                      <FilePickButton
+                        disabled={isCreating}
+                        buttonText="Choose kernel file"
+                        onFile={setNewKernelFile}
+                        selectedName={newKernelFile?.name ?? null}
+                      />
+                      {createKernelProgress !== null && (
+                        <div className="w-full">
+                          <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                            <div className="h-full bg-primary rounded-full" style={{ width: `${createKernelProgress.pct ?? 0}%` }} />
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-1">Uploading kernel… {formatProgress(createKernelProgress)}</div>
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                    <div className="space-y-2">
+                      <Label className="text-foreground">Rootfs (rootfs.ext4)</Label>
+                      <FilePickButton
+                        disabled={isCreating}
+                        buttonText="Choose rootfs file"
+                        onFile={setNewRootfsFile}
+                        selectedName={newRootfsFile?.name ?? null}
+                      />
+                      {createRootfsProgress !== null && (
+                        <div className="w-full">
+                          <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                            <div className="h-full bg-primary rounded-full" style={{ width: `${createRootfsProgress.pct ?? 0}%` }} />
+                          </div>
+                          <div className="text-xs text-muted-foreground mt-1">Uploading rootfs… {formatProgress(createRootfsProgress)}</div>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <div className="space-y-2">
+                    <Label className="text-foreground">Zip bundle (vmlinux + rootfs.ext4)</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Upload a .zip file containing <code className="bg-secondary px-1 rounded">vmlinux</code> and <code className="bg-secondary px-1 rounded">rootfs.ext4</code>
+                    </p>
+                    <FilePickButton
+                      disabled={isCreating}
+                      buttonText="Choose zip file"
+                      accept=".zip,application/zip"
+                      onFile={setNewBundleFile}
+                      selectedName={newBundleFile?.name ?? null}
+                    />
+                    {createBundleProgress !== null && (
+                      <div className="w-full">
+                        <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                          <div className="h-full bg-primary rounded-full" style={{ width: `${createBundleProgress.pct ?? 0}%` }} />
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">Uploading bundle… {formatProgress(createBundleProgress)}</div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button
@@ -390,7 +498,7 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
                       Creating…
                     </>
                   ) : (
-                    <>Create{newKernelFile || newRootfsFile ? " & upload" : ""}</>
+                    <>Create{(newKernelFile || newRootfsFile || newBundleFile) ? " & upload" : ""}</>
                   )}
                 </Button>
               </DialogFooter>
@@ -458,7 +566,7 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
                     onFile={(f) => uploadFile(img, "kernel", f)}
                   />
                   <Badge variant="outline" className={img.hasKernel ? "text-success" : "text-muted-foreground"}>
-                    {img.hasKernel ? "Uploaded" : "Missing"}
+                    {img.hasKernel ? formatUploadedAt(img.kernelUploadedAt) : "Missing"}
                   </Badge>
                 </div>
                 {uploadPctByKey[`${img.id}:kernel`] !== undefined && uploadPctByKey[`${img.id}:kernel`] !== null && (
@@ -481,7 +589,7 @@ export function ImagesPanel(props: { onUploadBusyChange?: (busy: boolean) => voi
                     onFile={(f) => uploadFile(img, "rootfs", f)}
                   />
                   <Badge variant="outline" className={img.hasRootfs ? "text-success" : "text-muted-foreground"}>
-                    {img.hasRootfs ? "Uploaded" : "Missing"}
+                    {img.hasRootfs ? formatUploadedAt(img.rootfsUploadedAt) : "Missing"}
                   </Badge>
                 </div>
                 {uploadPctByKey[`${img.id}:rootfs`] !== undefined && uploadPctByKey[`${img.id}:rootfs`] !== null && (

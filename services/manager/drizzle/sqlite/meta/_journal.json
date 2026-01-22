@@ -36,6 +36,13 @@
       "when": 1768771723860,
       "tag": "0004_elite_sauron",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1769091739481,
+      "tag": "0005_stale_inertia",
+      "breakpoints": true
     }
   ]
 }

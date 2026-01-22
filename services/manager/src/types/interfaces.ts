@@ -59,6 +59,12 @@ export interface StorageProvider {
   cloneDisk(src: string, dest: string): Promise<void>;
   listSnapshots(): Promise<string[]>;
   readSnapshotMeta(snapshotId: string): Promise<import("./snapshot.js").SnapshotMeta | null>;
+  /** Get the persistent disk path for a VM that survives jailer cleanup. */
+  persistentDiskPath(vmId: string): string;
+  /** Save the VM's rootfs to persistent storage (called before stop). */
+  saveDiskToPersistent(vmId: string, currentRootfsPath: string): Promise<void>;
+  /** Check if a persistent disk exists for a VM. */
+  hasPersistentDisk(vmId: string): Promise<boolean>;
 }
 
 export interface Reconciler {

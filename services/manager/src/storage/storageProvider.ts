@@ -71,6 +71,36 @@ export class LocalStorageProvider implements StorageProvider {
     await fs.rm(path.join(this.options.jailerChrootBaseDir, vmId), { recursive: true, force: true });
   }
 
+  /**
+   * Get a persistent disk path for a VM's rootfs that survives jailer cleanup.
+   * This is used during stop/start cycles to preserve user data.
+   */
+  persistentDiskPath(vmId: string): string {
+    return path.join(this.options.storageRoot, "vms", vmId, "rootfs.ext4");
+  }
+
+  /**
+   * Save the VM's rootfs from the jailer directory to persistent storage.
+   * Called before jailer cleanup during stop.
+   */
+  async saveDiskToPersistent(vmId: string, currentRootfsPath: string): Promise<void> {
+    const persistPath = this.persistentDiskPath(vmId);
+    await fs.mkdir(path.dirname(persistPath), { recursive: true });
+    await this.cloneDisk(currentRootfsPath, persistPath);
+  }
+
+  /**
+   * Check if a persistent disk exists for a VM.
+   */
+  async hasPersistentDisk(vmId: string): Promise<boolean> {
+    try {
+      await fs.access(this.persistentDiskPath(vmId));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async getSnapshotArtifactPaths(
     snapshotId: string
   ): Promise<{ dir: string; memPath: string; statePath: string; diskPath: string; metaPath: string }> {

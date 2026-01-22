@@ -26,7 +26,9 @@ export const guestImages = sqliteTable("guest_images", {
   createdAt: text("created_at").notNull(),
   kernelFilename: text("kernel_filename"),
   rootfsFilename: text("rootfs_filename"),
-  baseRootfsBytes: integer("base_rootfs_bytes", { mode: "number" })
+  baseRootfsBytes: integer("base_rootfs_bytes", { mode: "number" }),
+  kernelUploadedAt: text("kernel_uploaded_at"),
+  rootfsUploadedAt: text("rootfs_uploaded_at")
 });
 
 export const settings = sqliteTable("settings", {

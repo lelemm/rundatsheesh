@@ -15,6 +15,8 @@ export type GuestImageRow = {
   kernelFilename?: string | null;
   rootfsFilename?: string | null;
   baseRootfsBytes?: number | null;
+  kernelUploadedAt?: string | null;
+  rootfsUploadedAt?: string | null;
 };
 
 export type GuestImageListItem = GuestImageRow & {
@@ -61,6 +63,8 @@ export class ImageService {
         kernelFilename,
         rootfsFilename,
         baseRootfsBytes: r.baseRootfsBytes ?? null,
+        kernelUploadedAt: r.kernelUploadedAt ?? null,
+        rootfsUploadedAt: r.rootfsUploadedAt ?? null,
         isDefault: defId === String(r.id),
         hasKernel: Boolean(kernelFilename),
         hasRootfs: Boolean(rootfsFilename)
@@ -114,7 +118,9 @@ export class ImageService {
       createdAt: String(r.createdAt),
       kernelFilename: r.kernelFilename ?? null,
       rootfsFilename: r.rootfsFilename ?? null,
-      baseRootfsBytes: r.baseRootfsBytes ?? null
+      baseRootfsBytes: r.baseRootfsBytes ?? null,
+      kernelUploadedAt: r.kernelUploadedAt ?? null,
+      rootfsUploadedAt: r.rootfsUploadedAt ?? null
     };
   }
 
@@ -131,15 +137,17 @@ export class ImageService {
   }
 
   async markKernelUploaded(imageId: string, filename = DEFAULT_KERNEL_FILENAME): Promise<void> {
-    await this.db.update(this.guestImages).set({ kernelFilename: filename }).where(eq(this.guestImages.id, imageId));
+    const now = new Date().toISOString();
+    await this.db.update(this.guestImages).set({ kernelFilename: filename, kernelUploadedAt: now }).where(eq(this.guestImages.id, imageId));
   }
 
   async markRootfsUploaded(imageId: string, filename = DEFAULT_ROOTFS_FILENAME): Promise<void> {
     const full = this.rootfsPathFor(imageId, filename);
     const st = await fs.stat(full);
+    const now = new Date().toISOString();
     await this.db
       .update(this.guestImages)
-      .set({ rootfsFilename: filename, baseRootfsBytes: st.size })
+      .set({ rootfsFilename: filename, baseRootfsBytes: st.size, rootfsUploadedAt: now })
       .where(eq(this.guestImages.id, imageId));
   }
 
