@@ -4,10 +4,17 @@ set -euo pipefail
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd)
 OUT_DIR="$ROOT_DIR/services/guest-image/dist"
 
+# Shell variant: "busybox" (default) or "bash" (NVM support)
+SHELL_VARIANT=${SHELL_VARIANT:-busybox}
+
+echo "[debian] building with SHELL_VARIANT=$SHELL_VARIANT"
+
 mkdir -p "$OUT_DIR"
 
 docker build -f "$ROOT_DIR/services/guest-image/Dockerfile" \
   --progress=plain \
+  --network host \
+  --build-arg SHELL_VARIANT="$SHELL_VARIANT" \
   --output type=local,dest="$OUT_DIR" \
   "$ROOT_DIR"
 

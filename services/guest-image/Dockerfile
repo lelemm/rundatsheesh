@@ -17,6 +17,9 @@ ARG KERNEL_VERSION=5.10.210
 ARG KERNEL_CONFIG_URL=https://raw.githubusercontent.com/firecracker-microvm/firecracker/main/resources/guest_configs/microvm-kernel-x86_64-5.10.config
 ARG NODE_VERSION=20.11.1
 
+# Shell variant: "busybox" (default, more confined) or "bash" (NVM support)
+ARG SHELL_VARIANT=busybox
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      build-essential bc bison flex libssl-dev libelf-dev \
@@ -34,8 +37,9 @@ WORKDIR /rootfs
 ARG DEBIAN_MIRROR=https://deb.debian.org/debian
 ARG DEBIAN_SUITE=bookworm
 COPY services/guest-image/scripts/build-rootfs.sh /usr/local/bin/build-rootfs.sh
+ARG SHELL_VARIANT
 RUN chmod +x /usr/local/bin/build-rootfs.sh \
-  && DEBIAN_MIRROR="${DEBIAN_MIRROR}" DEBIAN_SUITE="${DEBIAN_SUITE}" NODE_VERSION="${NODE_VERSION}" /usr/local/bin/build-rootfs.sh /rootfs
+  && DEBIAN_MIRROR="${DEBIAN_MIRROR}" DEBIAN_SUITE="${DEBIAN_SUITE}" NODE_VERSION="${NODE_VERSION}" SHELL_VARIANT="${SHELL_VARIANT}" /usr/local/bin/build-rootfs.sh /rootfs
 
 # Ensure Node + npm are available inside the /exec sandbox chroot (/opt/sandbox).
 # The guest-agent executes commands under `chroot /opt/sandbox ...`, so tools must exist there.
@@ -77,8 +81,10 @@ COPY --from=guest-agent-builder /src/dist /rootfs/opt/guest-agent/dist
 COPY services/guest-image/rootfs-overlay/ /rootfs/
 
 # Provide a small binary init (PID1). Some minimal kernels may not support script init (/sbin/init).
+# Pass SHELL_VARIANT at compile time so guest-init sets JAIL_SHELL env var for guest-agent.
 COPY services/guest-image/init/guest-init.c /tmp/guest-init.c
-RUN gcc -O2 -o /rootfs/sbin/init /tmp/guest-init.c \
+ARG SHELL_VARIANT
+RUN gcc -O2 -DSHELL_VARIANT=\"${SHELL_VARIANT}\" -o /rootfs/sbin/init /tmp/guest-init.c \
   && chmod +x /rootfs/sbin/init \
   && rm -f /tmp/guest-init.c
 

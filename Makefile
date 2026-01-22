@@ -1,4 +1,6 @@
 .PHONY: deps build unit integration integration-bash test verify admin-ui-deps admin-ui-build publish
+.PHONY: integration-alpine integration-alpine-bash integration-debian integration-debian-bash integrations integrations-bash
+
 guest-images:
 	./scripts/build-guest-images.sh
 
@@ -44,11 +46,69 @@ unit:
 	cd services/manager && npm test
 	cd services/guest-agent && npm test
 
+# Default integration (alpine busybox)
 integration:
 	cd tests/integration && npm test
 
+# Alpine integration targets
+integration-alpine:
+	cd tests/integration && INTEGRATION_IMAGE=alpine npm test
+
+integration-alpine-bash:
+	cd tests/integration && INTEGRATION_IMAGE=alpine-bash npm test
+
+# Debian integration targets
+integration-debian:
+	cd tests/integration && INTEGRATION_IMAGE=debian npm test
+
+integration-debian-bash:
+	cd tests/integration && INTEGRATION_IMAGE=debian-bash npm test
+
+# Legacy alias for alpine-bash
 integration-bash:
 	cd tests/integration && INTEGRATION_IMAGE=alpine-bash npm test
+
+# Run all busybox flavor integrations
+integrations:
+	@echo "=== Running integration tests for all busybox flavors ==="
+	@echo ""
+	@echo "=== Alpine (busybox) ==="
+	cd tests/integration && INTEGRATION_IMAGE=alpine npm test
+	@echo ""
+	@echo "=== Debian (busybox) ==="
+	cd tests/integration && INTEGRATION_IMAGE=debian npm test
+	@echo ""
+	@echo "=== All busybox integrations passed ==="
+
+# Run all bash flavor integrations
+integrations-bash:
+	@echo "=== Running integration tests for all bash flavors ==="
+	@echo ""
+	@echo "=== Alpine (bash) ==="
+	cd tests/integration && INTEGRATION_IMAGE=alpine-bash npm test
+	@echo ""
+	@echo "=== Debian (bash) ==="
+	cd tests/integration && INTEGRATION_IMAGE=debian-bash npm test
+	@echo ""
+	@echo "=== All bash integrations passed ==="
+
+# Run ALL integration tests (all distros, all flavors)
+integrations-all:
+	@echo "=== Running ALL integration tests (all distros, all flavors) ==="
+	@echo ""
+	@echo "=== Alpine (busybox) ==="
+	cd tests/integration && INTEGRATION_IMAGE=alpine npm test
+	@echo ""
+	@echo "=== Alpine (bash) ==="
+	cd tests/integration && INTEGRATION_IMAGE=alpine-bash npm test
+	@echo ""
+	@echo "=== Debian (busybox) ==="
+	cd tests/integration && INTEGRATION_IMAGE=debian npm test
+	@echo ""
+	@echo "=== Debian (bash) ==="
+	cd tests/integration && INTEGRATION_IMAGE=debian-bash npm test
+	@echo ""
+	@echo "=== ALL integrations passed ==="
 
 test: unit integration
 

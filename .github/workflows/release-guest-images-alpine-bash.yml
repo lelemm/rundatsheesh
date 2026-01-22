@@ -1,4 +1,4 @@
-name: Release Guest Images (Bash)
+name: Release Guest Images (Alpine Bash)
 
 on:
   release:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  guest-images-bash:
+  guest-images-alpine-bash:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

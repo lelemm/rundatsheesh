@@ -157,7 +157,7 @@ trap cleanup EXIT
 echo "Waiting for manager..."
 wait_for_manager "$API_KEY" || { echo "Manager did not become ready"; FAILED=1; exit 1; }
 
-echo "Uploading Debian + Alpine guest images..."
+echo "Uploading Debian + Alpine guest images (all flavors)..."
 create_image() {
   local name="$1"
   local description="$2"
@@ -183,15 +183,23 @@ set_default() {
   curl -sf -X POST -H "X-API-Key: $API_KEY" "$MANAGER_BASE/v1/images/$image_id/set-default" >/dev/null
 }
 
-DEBIAN_ID=$(create_image "Debian (integration)" "Built by integration runner")
+# Debian (busybox) - default image
+DEBIAN_ID=$(create_image "Debian (integration)" "Built by integration runner - busybox shell")
 upload_file "$DEBIAN_ID" "kernel" "$ROOT_DIR/dist/images/debian/vmlinux"
 upload_file "$DEBIAN_ID" "rootfs" "$ROOT_DIR/dist/images/debian/rootfs.ext4"
 set_default "$DEBIAN_ID"
 
-ALPINE_ID=$(create_image "Alpine (integration)" "Built by integration runner")
+# Debian (bash) - with NVM support
+DEBIAN_BASH_ID=$(create_image "Debian Bash (integration)" "Built by integration runner - bash shell with NVM")
+upload_file "$DEBIAN_BASH_ID" "kernel" "$ROOT_DIR/dist/images/debian-bash/vmlinux"
+upload_file "$DEBIAN_BASH_ID" "rootfs" "$ROOT_DIR/dist/images/debian-bash/rootfs.ext4"
+
+# Alpine (busybox)
+ALPINE_ID=$(create_image "Alpine (integration)" "Built by integration runner - busybox shell")
 upload_file "$ALPINE_ID" "kernel" "$ROOT_DIR/dist/images/alpine/vmlinux"
 upload_file "$ALPINE_ID" "rootfs" "$ROOT_DIR/dist/images/alpine/rootfs.ext4"
 
+# Alpine (bash) - with NVM support
 ALPINE_BASH_ID=$(create_image "Alpine Bash (integration)" "Built by integration runner - bash shell with NVM")
 upload_file "$ALPINE_BASH_ID" "kernel" "$ROOT_DIR/dist/images/alpine-bash/vmlinux"
 upload_file "$ALPINE_BASH_ID" "rootfs" "$ROOT_DIR/dist/images/alpine-bash/rootfs.ext4"
@@ -217,19 +225,32 @@ fi
 echo "Running vitest integration suite..."
 
 # INTEGRATION_IMAGE can be set to run only a specific image variant:
-# - "alpine-bash" - test only the bash variant
-# - unset/empty - run all images (debian, alpine, alpine-bash)
+# - "debian"       - Debian with busybox shell (default)
+# - "debian-bash"  - Debian with bash shell and NVM support
+# - "alpine"       - Alpine with busybox shell
+# - "alpine-bash"  - Alpine with bash shell and NVM support
+# - unset/empty    - run all images
 INTEGRATION_IMAGE=${INTEGRATION_IMAGE:-}
 
 if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "debian" ]; then
-  echo "=== integration: default image (debian) ==="
+  echo "=== integration: debian image (busybox) ==="
   unset VM_IMAGE_ID
+  unset TEST_BASH_IMAGE
   npm -s run test:vitest || { FAILED=1; exit 1; }
 fi
 
+if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "debian-bash" ]; then
+  echo "=== integration: debian-bash image (with NVM) ==="
+  export VM_IMAGE_ID="$DEBIAN_BASH_ID"
+  export TEST_BASH_IMAGE=true
+  npm -s run test:vitest || { FAILED=1; exit 1; }
+  unset TEST_BASH_IMAGE
+fi
+
 if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "alpine" ]; then
-  echo "=== integration: alpine image ==="
+  echo "=== integration: alpine image (busybox) ==="
   export VM_IMAGE_ID="$ALPINE_ID"
+  unset TEST_BASH_IMAGE
   npm -s run test:vitest || { FAILED=1; exit 1; }
 fi
 
@@ -240,4 +261,3 @@ if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "alpine-bash" ]; then
   npm -s run test:vitest || { FAILED=1; exit 1; }
   unset TEST_BASH_IMAGE
 fi
-
