@@ -117,6 +117,35 @@ async function listSnapshots(): Promise<SnapshotMeta[]> {
   return json;
 }
 
+async function stopVm(vmId: string): Promise<void> {
+  const res = await fetch(`${MANAGER_BASE}/v1/vms/${vmId}/stop`, {
+    method: "POST",
+    headers: { "X-API-Key": API_KEY }
+  });
+  expect(res.status).toBe(204);
+}
+
+async function startVm(vmId: string): Promise<void> {
+  const res = await fetch(`${MANAGER_BASE}/v1/vms/${vmId}/start`, {
+    method: "POST",
+    headers: { "X-API-Key": API_KEY }
+  });
+  expect(res.status).toBe(204);
+}
+
+async function waitForVmState(vmId: string, expectedState: string, timeoutMs = 30000): Promise<VmPublic> {
+  const startTime = Date.now();
+  while (Date.now() - startTime < timeoutMs) {
+    const vm = await getVm(vmId);
+    // Case-insensitive comparison since API may return uppercase states
+    if (vm.state.toUpperCase() === expectedState.toUpperCase()) {
+      return vm;
+    }
+    await delay(500);
+  }
+  throw new Error(`VM ${vmId} did not reach state "${expectedState}" within ${timeoutMs}ms`);
+}
+
 async function vmExec(vmId: string, cmd: string): Promise<ExecResult> {
   const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/exec`, { cmd });
   expect(status).toBe(200);
@@ -1320,5 +1349,79 @@ result.set({
     expect(readResultsRes.stdout).toContain("original");
     expect(readResultsRes.stdout).toContain("filtered");
   });
+
+  it("real-world: VM stop and verify operations fail on stopped VM", async () => {
+    // Test VM stop functionality - verifies that:
+    // 1. A running VM can be stopped
+    // 2. Operations correctly fail on a stopped VM
+    // Note: VM restart (start after stop) may not be supported in all environments
+    // due to Firecracker jailer limitations
+    
+    // Step 1: Create a fresh VM for this test
+    const vm = await createVm({ cpu: 1, memMb: 256, allowIps: ["0.0.0.0/0"], outboundInternet: true });
+    // eslint-disable-next-line no-console
+    console.info("[it] vm-stop: VM created", { vmId: vm.id, state: vm.state });
+    
+    try {
+      // Step 2: Verify VM is initially running (API returns uppercase state)
+      expect(vm.state.toUpperCase()).toBe("RUNNING");
+      
+      // Step 3: Execute a command to verify VM is responsive
+      const preStopExec = await vmExec(vm.id, "echo 'VM is alive'");
+      // eslint-disable-next-line no-console
+      console.info("[it] vm-stop: pre-stop exec", { exitCode: preStopExec.exitCode, stdout: preStopExec.stdout });
+      expect(preStopExec.exitCode).toBe(0);
+      expect(preStopExec.stdout.trim()).toBe("VM is alive");
+      
+      // Step 4: Create a marker file to prove VM was working
+      const markerContent = `vm-stop-test-${Date.now()}`;
+      const createMarker = await vmExec(vm.id, `echo '${markerContent}' > /workspace/stop-marker.txt`);
+      // eslint-disable-next-line no-console
+      console.info("[it] vm-stop: create marker file", { exitCode: createMarker.exitCode });
+      expect(createMarker.exitCode).toBe(0);
+      
+      // Step 5: Stop the VM
+      // eslint-disable-next-line no-console
+      console.info("[it] vm-stop: stopping VM...");
+      await stopVm(vm.id);
+      
+      // Step 6: Wait for VM to be stopped
+      const stoppedVm = await waitForVmState(vm.id, "STOPPED", 30000);
+      // eslint-disable-next-line no-console
+      console.info("[it] vm-stop: VM stopped", { vmId: stoppedVm.id, state: stoppedVm.state });
+      expect(stoppedVm.state.toUpperCase()).toBe("STOPPED");
+      
+      // Step 7: Verify exec fails on stopped VM (should return error status)
+      const { status: execOnStoppedStatus } = await apiJson<ExecResult>(
+        "POST",
+        `${MANAGER_BASE}/v1/vms/${vm.id}/exec`,
+        { cmd: "echo test" }
+      );
+      // eslint-disable-next-line no-console
+      console.info("[it] vm-stop: exec on stopped VM", { status: execOnStoppedStatus });
+      // Should fail with 4xx or 5xx (VM not running)
+      expect(execOnStoppedStatus).toBeGreaterThanOrEqual(400);
+      
+      // Step 8: Verify run-ts also fails on stopped VM
+      const { status: runTsOnStoppedStatus } = await apiJson<ExecResult>(
+        "POST",
+        `${MANAGER_BASE}/v1/vms/${vm.id}/run-ts`,
+        { code: "console.log('test')" }
+      );
+      // eslint-disable-next-line no-console
+      console.info("[it] vm-stop: run-ts on stopped VM", { status: runTsOnStoppedStatus });
+      expect(runTsOnStoppedStatus).toBeGreaterThanOrEqual(400);
+      
+      // Step 9: Verify GET /vm/:id still works and shows stopped state
+      const vmInfo = await getVm(vm.id);
+      // eslint-disable-next-line no-console
+      console.info("[it] vm-stop: final VM state", { vmId: vmInfo.id, state: vmInfo.state });
+      expect(vmInfo.state.toUpperCase()).toBe("STOPPED");
+      
+    } finally {
+      // Cleanup: delete the VM
+      await deleteVm(vm.id);
+    }
+  }, 60_000); // 1 minute timeout for stop operations
 });
 

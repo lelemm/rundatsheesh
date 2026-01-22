@@ -523,8 +523,6 @@ For local development:
 
 ```
 http://localhost:3000/swagger
-```
-
-The OpenAPI 3.0 specification can be downloaded from:```
+```The OpenAPI 3.0 specification can be downloaded from:```
 https://your-instance/openapi.json
 ```
