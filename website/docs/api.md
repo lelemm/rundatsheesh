@@ -519,9 +519,7 @@ An interactive Swagger UI is available on your running instance at:
 https://your-instance/swagger
 ```
 
-For local development:
-
-```
+For local development:```
 http://localhost:3000/swagger
 ```The OpenAPI 3.0 specification can be downloaded from:```
 https://your-instance/openapi.json
