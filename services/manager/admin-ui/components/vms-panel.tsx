@@ -534,11 +534,11 @@ export function VMsPanel() {
       {error && <p className="text-sm text-destructive shrink-0">{error}</p>}
       {loading && <p className="text-sm text-muted-foreground shrink-0">Loading VMs…</p>}
 
-        <div className="grid gap-3 overflow-auto flex-1">
+        <div className="flex flex-col gap-3 overflow-auto flex-1">
           {filteredVMs.map((vm) => (
             <Card
               key={vm.id}
-              className={`bg-card border-border cursor-pointer transition-colors hover:border-primary/50 ${selectedVM?.id === vm.id ? "border-primary" : ""}`}
+              className={`bg-card border-border cursor-pointer transition-colors hover:border-primary/50 w-fit ${selectedVM?.id === vm.id ? "border-primary" : ""}`}
               onClick={() => setSelectedVM(vm)}
             >
               <CardContent className="p-4">
