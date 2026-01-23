@@ -97,7 +97,9 @@ export async function apiUploadBinaryWithProgress(input: {
   onProgress?: (p: { loaded: number; total: number | null; pct: number | null }) => void
 }): Promise<void> {
   const contentType = input.contentType ?? "application/octet-stream"
-  const body = input.data instanceof Blob ? input.data : new Blob([input.data], { type: contentType })
+  // Always wrap in a new Blob with the correct content type to ensure the browser
+  // doesn't use the File's detected MIME type (which can vary by OS/browser)
+  const body = new Blob([input.data], { type: contentType })
 
   await new Promise<void>((resolve, reject) => {
     const xhr = new XMLHttpRequest()

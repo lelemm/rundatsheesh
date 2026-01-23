@@ -220,10 +220,22 @@ export function buildApp(options: BuildAppOptions) {
   app.get("/openapi.json", async () => app.swagger());
 
   app.addContentTypeParser(
-    ["application/gzip", "application/x-tar", "application/octet-stream"],
+    [
+      "application/gzip",
+      "application/x-tar",
+      "application/octet-stream",
+      "application/zip",
+      "application/x-zip",
+      "application/x-zip-compressed"
+    ],
     // Leave payload as a stream; routes can buffer with limits or stream to disk.
     (_req, body, done) => done(null, body)
   );
+
+  // Catch-all for any other binary content types that might be sent by browsers
+  // (e.g., some browsers may send unusual MIME types for zip files)
+  // Handle both normal (application/zip) and potentially malformed (zip/application) patterns
+  app.addContentTypeParser(/zip/i, (_req, body, done) => done(null, body));
 
   app.register(authPlugin, { apiKey: options.apiKey, deps: options.deps });
   app.register(apiPlugin, { deps: options.deps });
