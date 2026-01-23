@@ -19,6 +19,19 @@ export interface RunTsRequest {
   env?: string[];
 }
 
+export interface RunJsRequest {
+  path?: string;
+  code?: string;
+  args?: string[];
+  nodeFlags?: string[];
+  timeoutMs?: number;
+  /**
+   * Additional environment variables for the program execution.
+   * Format: ["KEY=value", ...]
+   */
+  env?: string[];
+}
+
 export interface ExecResult {
   exitCode: number;
   stdout: string;

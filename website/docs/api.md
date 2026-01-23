@@ -224,12 +224,7 @@ POST /v1/vms/:id/run-ts
 **Example - Inline Code:**
 
 ```bash
-curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-ts \
-  -H "X-API-Key: \$API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "code": "console.log(2 + 2)"
-  }'
+curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-ts   -H "X-API-Key: \$API_KEY"   -H "Content-Type: application/json"   -d '{"code":"console.log(2 + 2)"}'
 ```
 
 **Example - With Environment Variables:**
@@ -237,13 +232,7 @@ curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-ts \
 Deno requires explicit permission for env vars. The `env` array automatically grants access to only those keys:
 
 ```bash
-curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-ts \
-  -H "X-API-Key: \$API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "env": ["API_TOKEN=secret123", "BASE_URL=https://api.example.com"],
-    "code": "console.log(Deno.env.get(\"BASE_URL\"))"
-  }'
+curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-ts   -H "X-API-Key: \$API_KEY"   -H "Content-Type: application/json"   -d '{"env":["API_TOKEN=secret123","BASE_URL=https://api.example.com"],"code":"console.log(Deno.env.get(\"BASE_URL\"))"}'
 ```
 
 **Example - Structured Results:**
@@ -251,12 +240,7 @@ curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-ts \
 Use built-in `result.set()` and `result.error()` helpers to return structured JSON:
 
 ```bash
-curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-ts \
-  -H "X-API-Key: \$API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "code": "result.set({ ok: true, answer: 42 })"
-  }'
+curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-ts   -H "X-API-Key: \$API_KEY"   -H "Content-Type: application/json"   -d '{"code":"result.set({ ok: true, answer: 42 })"}'
 ```
 
 **Response:**
@@ -269,6 +253,56 @@ curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-ts \
   "result": { "ok": true, "answer": 42 }
 }
 ```
+
+### Run JavaScript (Node.js)
+
+Executes JavaScript using Node.js inside the VM.
+
+```
+POST /v1/vms/:id/run-js
+```
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `code` | string | * | Inline JavaScript code |
+| `path` | string | * | Path to `.js` file in `/workspace` |
+| `args` | string[] | No | Arguments passed to the program |
+| `env` | string[] | No | Environment variables as `["KEY=value"]` |
+| `nodeFlags` | string[] | No | Additional Node flags (advanced) |
+| `timeoutMs` | number | No | Timeout in milliseconds |
+
+*Either `code` or `path` is required.*
+
+**Example - Inline Code:**
+
+```bash
+curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-js   -H "X-API-Key: \$API_KEY"   -H "Content-Type: application/json"   -d '{"code":"console.log(2 + 2)"}'
+```
+
+**Example - Structured Results:**
+
+```bash
+curl -X POST http://localhost:3000/v1/vms/vm-abc123/run-js   -H "X-API-Key: \$API_KEY"   -H "Content-Type: application/json"   -d '{"code":"result.set({ ok: true, answer: 42 })"}'
+```
+
+### Get Execution Logs (exec/run-ts/run-js)
+
+Returns recent execution history captured by the manager from API calls (including calls made outside the Admin UI).
+
+```
+GET /v1/vms/:id/exec-logs?limit=100&type=all
+```
+
+**Query Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `limit` | number | Max entries (1-200, default 50) |
+| `type` | string | Filter: `all`, `exec`, `run-ts`, `run-js` |
+
+---
 
 ---
 
@@ -506,6 +540,8 @@ All errors return JSON with a `message` field:
 | `POST /v1/vms` | 30/min |
 | `POST /v1/vms/:id/exec` | 60/min |
 | `POST /v1/vms/:id/run-ts` | 60/min |
+| `POST /v1/vms/:id/run-js` | 60/min |
+| `GET /v1/vms/:id/exec-logs` | 120/min |
 | `POST /v1/vms/:id/files/upload` | 30/min |
 | `GET /v1/vms/:id/files/download` | 60/min |
 
@@ -519,8 +555,14 @@ An interactive Swagger UI is available on your running instance at:
 https://your-instance/swagger
 ```
 
-For local development:```
+For local development:
+
+```
 http://localhost:3000/swagger
-```The OpenAPI 3.0 specification can be downloaded from:```
+```
+
+The OpenAPI 3.0 specification can be downloaded from:
+
+```
 https://your-instance/openapi.json
 ```

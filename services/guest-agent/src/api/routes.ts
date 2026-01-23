@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { Readable } from "node:stream";
-import type { ExecRequest, NetConfigRequest, RunTsRequest, TimeSyncRequest } from "../types/agent.js";
+import type { ExecRequest, NetConfigRequest, RunJsRequest, RunTsRequest, TimeSyncRequest } from "../types/agent.js";
 import type { ExecRunner, FileService, FirewallManager, NetworkConfigurator } from "../types/interfaces.js";
 import { syncSystemTime } from "../time/timeSync.js";
 
@@ -62,6 +62,17 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       reply.code(400);
       const detail = String((err as any)?.message ?? err);
       return { message: "Invalid run-ts request", detail: detail.slice(0, 500) };
+    }
+  });
+
+  app.post("/run-js", { bodyLimit: BODY_LIMITS.json }, async (request, reply) => {
+    const payload = request.body as RunJsRequest;
+    try {
+      return await opts.execRunner.runJs(payload);
+    } catch (err) {
+      reply.code(400);
+      const detail = String((err as any)?.message ?? err);
+      return { message: "Invalid run-js request", detail: detail.slice(0, 500) };
     }
   });
 

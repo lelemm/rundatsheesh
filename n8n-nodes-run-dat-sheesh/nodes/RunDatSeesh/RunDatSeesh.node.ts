@@ -96,7 +96,8 @@ export class RunDatSeesh implements INodeType {
           { name: "Stop VM", value: "stop", action: "Stop a VM" },
           { name: "Destroy VM", value: "destroy", action: "Destroy a VM" },
           { name: "Execute Command", value: "exec", action: "Execute a command in a VM" },
-          { name: "Run TypeScript (Deno)", value: "runTs", action: "Run TypeScript in a VM" }
+          { name: "Run TypeScript (Deno)", value: "runTs", action: "Run TypeScript in a VM" },
+          { name: "Run JavaScript (Node.js)", value: "runJs", action: "Run JavaScript in a VM" }
         ],
         default: "list"
       },
@@ -109,7 +110,7 @@ export class RunDatSeesh implements INodeType {
         displayOptions: {
           show: {
             resource: ["vms"],
-            operationVms: ["get", "start", "stop", "destroy", "exec", "runTs"]
+            operationVms: ["get", "start", "stop", "destroy", "exec", "runTs", "runJs"]
           }
         }
       },
@@ -193,7 +194,7 @@ export class RunDatSeesh implements INodeType {
         name: "timeoutMs",
         type: "number",
         default: 0,
-        displayOptions: { show: { resource: ["vms"], operationVms: ["exec", "runTs"] } }
+        displayOptions: { show: { resource: ["vms"], operationVms: ["exec", "runTs", "runJs"] } }
       },
       {
         displayName: "Environment",
@@ -212,7 +213,7 @@ export class RunDatSeesh implements INodeType {
             ]
           }
         ],
-        displayOptions: { show: { resource: ["vms"], operationVms: ["exec", "runTs"] } }
+        displayOptions: { show: { resource: ["vms"], operationVms: ["exec", "runTs", "runJs"] } }
       },
       {
         displayName: "TypeScript Code",
@@ -248,6 +249,43 @@ export class RunDatSeesh implements INodeType {
         placeholder: "--no-check,--quiet",
         description: "Comma-separated extra Deno flags (advanced).",
         displayOptions: { show: { resource: ["vms"], operationVms: ["runTs"] } }
+      },
+
+      // VM run-js params
+      {
+        displayName: "JavaScript Code",
+        name: "jsCode",
+        type: "string",
+        default: "",
+        typeOptions: { rows: 8 },
+        description: "Inline JavaScript code to run. Provide either Code or Path.",
+        displayOptions: { show: { resource: ["vms"], operationVms: ["runJs"] } }
+      },
+      {
+        displayName: "JavaScript File Path",
+        name: "jsPath",
+        type: "string",
+        default: "",
+        description: "Path to a .js file inside the VM under /workspace. Provide either Code or Path.",
+        displayOptions: { show: { resource: ["vms"], operationVms: ["runJs"] } }
+      },
+      {
+        displayName: "Arguments",
+        name: "jsArgs",
+        type: "string",
+        default: "",
+        placeholder: "arg1,arg2",
+        description: "Comma-separated arguments passed to the program.",
+        displayOptions: { show: { resource: ["vms"], operationVms: ["runJs"] } }
+      },
+      {
+        displayName: "Node Flags",
+        name: "nodeFlags",
+        type: "string",
+        default: "",
+        placeholder: "--max-old-space-size=512",
+        description: "Comma-separated extra Node.js flags (advanced).",
+        displayOptions: { show: { resource: ["vms"], operationVms: ["runJs"] } }
       },
 
       // Files
@@ -514,6 +552,41 @@ export class RunDatSeesh implements INodeType {
         if (envArray.length) body.env = envArray;
 
         const data = await runDatsheeshApiRequest.call(this, "POST", `/v1/vms/${encodeURIComponent(vmId)}/run-ts`, { body });
+        returnData.push({ json: data });
+        continue;
+      }
+
+      if (operation === "runJs") {
+        const vmId = this.getNodeParameter("vmIdVms", i) as string;
+        const timeoutMsRaw = this.getNodeParameter("timeoutMs", i) as number;
+        const timeoutMs = timeoutMsRaw && timeoutMsRaw > 0 ? timeoutMsRaw : undefined;
+
+        const jsCode = (this.getNodeParameter("jsCode", i) as string).trim();
+        const jsPath = (this.getNodeParameter("jsPath", i) as string).trim();
+        const jsArgsRaw = (this.getNodeParameter("jsArgs", i) as string).trim();
+        const nodeFlagsRaw = (this.getNodeParameter("nodeFlags", i) as string).trim();
+        const envFc = this.getNodeParameter("env", i, {}) as any;
+
+        const envPairs: Array<{ name?: string; value?: string }> = Array.isArray(envFc?.values) ? envFc.values : [];
+        const envArray = envPairs
+          .filter((v) => v?.name)
+          .map((v) => `${String(v.name)}=${String(v.value ?? "")}`);
+
+        if (!jsCode && !jsPath) {
+          throw new NodeOperationError(this.getNode(), "Provide either JavaScript Code or JavaScript File Path", {
+            itemIndex: i
+          });
+        }
+
+        const body: any = {};
+        if (jsCode) body.code = jsCode;
+        if (jsPath) body.path = jsPath;
+        if (jsArgsRaw) body.args = jsArgsRaw.split(",").map((s) => s.trim()).filter(Boolean);
+        if (nodeFlagsRaw) body.nodeFlags = nodeFlagsRaw.split(",").map((s) => s.trim()).filter(Boolean);
+        if (timeoutMs !== undefined) body.timeoutMs = timeoutMs;
+        if (envArray.length) body.env = envArray;
+
+        const data = await runDatsheeshApiRequest.call(this, "POST", `/v1/vms/${encodeURIComponent(vmId)}/run-js`, { body });
         returnData.push({ json: data });
         continue;
       }

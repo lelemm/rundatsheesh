@@ -6,6 +6,7 @@ import { HttpError } from "./httpErrors.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import AdmZip from "adm-zip";
+import { ExecLogService } from "../services/execLogService.js";
 
 export interface ApiPluginOptions {
   deps: AppDeps;
@@ -807,6 +808,56 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     }
   );
 
+  app.get(
+    "/v1/vms/:id/exec-logs",
+    {
+      schema: {
+        summary: "Get VM execution logs",
+        description:
+          "Returns recent exec/run-ts/run-js executions for a VM (captured from API calls) as structured entries. Results are newest-first.",
+        tags: ["vms", "exec"],
+        params: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string", description: "VM id" } }
+        },
+        querystring: {
+          type: "object",
+          properties: {
+            limit: { type: "number", description: "Max number of entries (1-200, default 50)" },
+            type: { type: "string", description: "Filter by type: all | exec | run-ts | run-js" }
+          }
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["entries", "hasMore"],
+            properties: {
+              entries: { type: "array", items: { type: "object", additionalProperties: true } },
+              hasMore: { type: "boolean" }
+            }
+          },
+          400: ERROR_RESPONSE,
+          404: ERROR_RESPONSE
+        }
+      }
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      requireValidVmId(id);
+      const query = request.query as { limit?: number; type?: string } | undefined;
+      const vm = await opts.deps.store.get(id);
+      if (!vm || vm.state === "DELETED") {
+        reply.code(404);
+        return { message: "VM not found" };
+      }
+      const typeRaw = String(query?.type ?? "all").trim().toLowerCase();
+      const type = (typeRaw === "exec" || typeRaw === "run-ts" || typeRaw === "run-js" ? typeRaw : "all") as any;
+      const svc = new ExecLogService();
+      return svc.tail(vm.logsDir, { limit: query?.limit, type });
+    }
+  );
+
   app.post(
     "/v1/vms",
     {
@@ -976,7 +1027,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     "/v1/vms/:id/exec",
     {
       bodyLimit: BODY_LIMITS.jsonMedium,
-      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      config: { rateLimit: { max: 300, timeWindow: "1 minute" } },
       schema: {
         summary: "Execute command",
         description: "Executes a shell command inside the VM as uid/gid 1000, confined to /workspace.",
@@ -1136,6 +1187,97 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         return { message: "Invalid request body" };
       }
       return opts.deps.vmService.runTs(id, body);
+    }
+  );
+
+  app.post(
+    "/v1/vms/:id/run-js",
+    {
+      bodyLimit: BODY_LIMITS.jsonMedium,
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      schema: {
+        summary: "Run JavaScript (Node.js)",
+        description:
+          "Runs JavaScript inside the VM using Node.js. Provide either inline code or a file path.",
+        tags: ["exec"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+        openapi: {
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  anyOf: [{ required: ["code"] }, { required: ["path"] }],
+                  properties: {
+                    path: { type: "string" },
+                    code: { type: "string" },
+                    args: { type: "array", items: { type: "string" } },
+                    nodeFlags: { type: "array", items: { type: "string" } },
+                    timeoutMs: { type: "number" },
+                    env: {
+                      type: "array",
+                      items: { type: "string" },
+                      description: 'Environment variables in the format "KEY=value"'
+                    }
+                  }
+                },
+                examples: {
+                  inline: { value: { code: "console.log(2 + 2)" } },
+                  file: { value: { path: "/workspace/app/main.js" } }
+                }
+              }
+            }
+          }
+        },
+        body: {
+          type: "object",
+          anyOf: [{ required: ["code"] }, { required: ["path"] }],
+          properties: {
+            path: { type: "string", description: "Path to a .js file inside /workspace" },
+            code: { type: "string", description: "Inline JavaScript code" },
+            args: { type: "array", items: { type: "string" }, description: "Arguments passed to the program" },
+            nodeFlags: { type: "array", items: { type: "string" }, description: "Additional Node flags (advanced)" },
+            timeoutMs: { type: "number", description: "Timeout in milliseconds" },
+            env: {
+              type: "array",
+              items: { type: "string" },
+              description: 'Environment variables in the format "KEY=value"'
+            }
+          },
+          examples: [{ code: "console.log(2 + 2)" }, { path: "/workspace/app/main.js" }]
+        },
+        response: {
+          200: {
+            type: "object",
+            required: ["exitCode", "stdout", "stderr"],
+            additionalProperties: true,
+            properties: {
+              exitCode: { type: "number", description: "Program exit code" },
+              stdout: { type: "string", description: "UTF-8 stdout" },
+              stderr: { type: "string", description: "UTF-8 stderr" },
+              // Optional structured output captured inside the VM via global `result.set(...)`.
+              result: { type: "object", additionalProperties: true, description: "Structured result payload (if set)" },
+              // Optional structured error captured inside the VM via global `result.error(...)`.
+              error: { type: "object", additionalProperties: true, description: "Structured error payload (if set)" }
+            },
+            examples: [{ exitCode: 0, stdout: "4\n", stderr: "" }]
+          },
+          400: ERROR_RESPONSE
+        }
+      }
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      requireValidVmId(id);
+      const body = request.body as
+        | { path?: string; code?: string; args?: string[]; nodeFlags?: string[]; timeoutMs?: number; env?: string[] }
+        | undefined;
+      if (!body || (!body.path && !body.code)) {
+        reply.code(400);
+        return { message: "Invalid request body" };
+      }
+      return opts.deps.vmService.runJs(id, body);
     }
   );
 

@@ -69,3 +69,16 @@ export interface VmRunTsRequest {
    */
   env?: string[];
 }
+
+export interface VmRunJsRequest {
+  path?: string;
+  code?: string;
+  args?: string[];
+  nodeFlags?: string[];
+  timeoutMs?: number;
+  /**
+   * Additional environment variables passed to the run-js process.
+   * Format: ["KEY=value", ...]
+   */
+  env?: string[];
+}

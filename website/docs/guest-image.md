@@ -71,6 +71,16 @@ Because `exec` runs inside a minimal chroot jail, a small toolchain is available
 - env vars: when the API request includes `env: ["KEY=value", ...]`, `run-ts` will allow access to only those keys (so `Deno.env.get("KEY")` works)
 - structured return: scripts can call `result.set(value)` / `result.error(err)` and the manager will include `result` / `error` fields in the response JSON
 
+### 6) Node.js for `run-js`
+
+`run-js` uses **Node.js** and executes inside the same chroot jail as `exec`.
+
+Behavior:
+- reads/writes are expected to stay under `/workspace` (same workspace contract as `run-ts`)
+- env vars can be passed via `env: ["KEY=value", ...]` and are available via `process.env.KEY`
+- structured return: scripts can call `result.set(value)` / `result.error(err)` and the manager will include `result` / `error` fields in the response JSON
+- stdout/stderr may include ANSI escape sequences (colors), which the Admin UI renders like a terminal
+
 ## Uploading images to the manager
 
 You can either:

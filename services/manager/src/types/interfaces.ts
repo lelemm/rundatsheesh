@@ -1,4 +1,4 @@
-import type { VmCreateRequest, VmExecRequest, VmRecord, VmRunTsRequest } from "./vm.js";
+import type { VmCreateRequest, VmExecRequest, VmRecord, VmRunJsRequest, VmRunTsRequest } from "./vm.js";
 
 export interface VmStore {
   create(vm: VmRecord): Promise<void>;
@@ -39,6 +39,7 @@ export interface AgentClient {
   syncTime(vmId: string, payload: { unixTimeMs: number }): Promise<void>;
   exec(vmId: string, payload: VmExecRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }>;
   runTs(vmId: string, payload: VmRunTsRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }>;
+  runJs(vmId: string, payload: VmRunJsRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }>;
   upload(vmId: string, dest: string, data: Buffer): Promise<void>;
   download(vmId: string, path: string): Promise<Buffer>;
 }
@@ -53,6 +54,8 @@ export interface StorageProvider {
     input: { kernelSrcPath: string; diskSrcPath: string; diskSizeBytes?: number }
   ): Promise<{ rootfsPath: string; logsDir: string; kernelPath: string }>;
   cleanupVmStorage(vmId: string): Promise<void>;
+  /** Remove the jailer runtime directory for a VM (but keep persistent storage under STORAGE_ROOT). */
+  cleanupJailerVmDir(vmId: string): Promise<void>;
   getSnapshotArtifactPaths(
     snapshotId: string
   ): Promise<{ dir: string; memPath: string; statePath: string; diskPath: string; metaPath: string }>;

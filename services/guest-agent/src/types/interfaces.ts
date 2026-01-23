@@ -1,4 +1,4 @@
-import type { ExecRequest, ExecResult, RunTsRequest } from "./agent.js";
+import type { ExecRequest, ExecResult, RunJsRequest, RunTsRequest } from "./agent.js";
 import type { NetConfigRequest } from "./agent.js";
 
 export interface FirewallManager {
@@ -17,6 +17,7 @@ export interface FirewallManager {
 export interface ExecRunner {
   exec(payload: ExecRequest): Promise<ExecResult>;
   runTs(payload: RunTsRequest): Promise<ExecResult>;
+  runJs(payload: RunJsRequest): Promise<ExecResult>;
 }
 
 export interface FileService {

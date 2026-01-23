@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentClient } from "../types/interfaces.js";
-import type { VmExecRequest, VmRunTsRequest } from "../types/vm.js";
+import type { VmExecRequest, VmRunJsRequest, VmRunTsRequest } from "../types/vm.js";
 import { buildBinaryRequest, buildJsonRequest } from "./httpRequest.js";
 import { parseHttpResponse } from "./httpResponse.js";
 import { shouldRetryVsock } from "./retryPolicy.js";
@@ -49,6 +49,11 @@ export class VsockAgentClient implements AgentClient {
   async runTs(vmId: string, payload: VmRunTsRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }> {
     const timeoutMs = typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined;
     return this.request(vmId, "POST", "/run-ts", payload, { timeoutMs });
+  }
+
+  async runJs(vmId: string, payload: VmRunJsRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }> {
+    const timeoutMs = typeof payload.timeoutMs === "number" ? payload.timeoutMs : undefined;
+    return this.request(vmId, "POST", "/run-js", payload, { timeoutMs });
   }
 
   async upload(vmId: string, dest: string, data: Buffer): Promise<void> {

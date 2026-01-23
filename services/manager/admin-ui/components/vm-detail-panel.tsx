@@ -9,6 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
 import { apiGetJson, apiRequestJson } from "@/lib/api"
+import { CodeBlock } from "@/components/code-block"
+import { TerminalOutput } from "@/components/terminal-output"
 import {
   X,
   Terminal,
@@ -66,6 +68,24 @@ interface LogsResponse {
   lines: string[]
   truncated: boolean
   updatedAt?: string
+}
+
+interface ExecLogEntry {
+  id: string
+  timestamp: string
+  type: "exec" | "run-ts" | "run-js"
+  input: {
+    cmd?: string
+    code?: string
+    path?: string
+    args?: string[]
+    env?: string[]
+    timeoutMs?: number
+    denoFlags?: string[]
+    nodeFlags?: string[]
+  }
+  result: ExecResult
+  durationMs: number
 }
 
 interface TsExecution {
@@ -129,9 +149,18 @@ export function VMDetailPanel({
   const [tsExecutions, setTsExecutions] = useState<TsExecution[]>([])
   const [isRunningTs, setIsRunningTs] = useState(false)
   const [selectedTsExecution, setSelectedTsExecution] = useState<TsExecution | null>(null)
+
+  // JS Execution
+  const [jsCode, setJsCode] = useState("")
+  const [jsResult, setJsResult] = useState<ExecResult | null>(null)
+  const [isRunningJs, setIsRunningJs] = useState(false)
   
   // Log type tabs
-  const [logType, setLogType] = useState<"system" | "exec" | "ts">("system")
+  const [logType, setLogType] = useState<"system" | "executions">("system")
+  const [execLogs, setExecLogs] = useState<ExecLogEntry[]>([])
+  const [selectedExecLog, setSelectedExecLog] = useState<ExecLogEntry | null>(null)
+  const [execLogsLoading, setExecLogsLoading] = useState(false)
+  const [execLogsError, setExecLogsError] = useState<string | null>(null)
 
   const handleExecuteCommand = async () => {
     const trimmed = command.trim()
@@ -188,6 +217,24 @@ export function VMDetailPanel({
     }
   }
 
+  const handleRunJs = async () => {
+    const trimmed = jsCode.trim()
+    if (!trimmed || isRunningJs) return
+
+    setIsRunningJs(true)
+    try {
+      const result = await apiRequestJson<ExecResult>("POST", `/v1/vms/${encodeURIComponent(vm.id)}/run-js`, {
+        code: trimmed,
+      })
+      setJsResult(result)
+    } catch (err: any) {
+      const message = String(err?.message ?? err)
+      setJsResult({ exitCode: -1, stdout: "", stderr: message })
+    } finally {
+      setIsRunningJs(false)
+    }
+  }
+
   useEffect(() => {
     if (activeTab !== "logs") return
     let cancelled = false
@@ -214,6 +261,39 @@ export function VMDetailPanel({
       clearInterval(timer)
     }
   }, [activeTab, vm.id])
+
+  useEffect(() => {
+    if (activeTab !== "logs") return
+    if (logType !== "executions") return
+    let cancelled = false
+    const loadExecLogs = async () => {
+      setExecLogsLoading(true)
+      setExecLogsError(null)
+      try {
+        const data = await apiGetJson<{ entries: ExecLogEntry[]; hasMore: boolean }>(
+          `/v1/vms/${encodeURIComponent(vm.id)}/exec-logs?limit=100&type=all`
+        )
+        if (cancelled) return
+        const entries = data.entries ?? []
+        setExecLogs(entries)
+        setSelectedExecLog((prev) => {
+          if (prev && entries.some((e) => e.id === prev.id)) return prev
+          return entries.length ? entries[0] : null
+        })
+      } catch (err: any) {
+        if (cancelled) return
+        setExecLogsError(String(err?.message ?? err))
+      } finally {
+        if (!cancelled) setExecLogsLoading(false)
+      }
+    }
+    loadExecLogs()
+    const timer = setInterval(loadExecLogs, 4000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+    }
+  }, [activeTab, vm.id, logType])
 
   // Resize handling
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -356,6 +436,13 @@ export function VMDetailPanel({
           >
             <Code className="w-3 h-3 mr-1" />
             TS
+          </TabsTrigger>
+          <TabsTrigger
+            value="javascript"
+            className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
+          >
+            <Code className="w-3 h-3 mr-1" />
+            JS
           </TabsTrigger>
           <TabsTrigger
             value="logs"
@@ -578,6 +665,82 @@ export function VMDetailPanel({
           </div>
         </TabsContent>
 
+        {/* JavaScript Tab */}
+        <TabsContent value="javascript" className="flex-1 flex flex-col p-4 pt-2 min-h-0 gap-3">
+          <div className="shrink-0">
+            <Label className="text-xs text-muted-foreground mb-2 block">JavaScript Code</Label>
+            <Textarea
+              value={jsCode}
+              onChange={(e) => setJsCode(e.target.value)}
+              placeholder={`// Your JavaScript code here\nresult.set({ hello: "world" });`}
+              className="font-mono text-xs bg-input border-border text-foreground placeholder:text-muted-foreground min-h-[120px] resize-none"
+            />
+            <Button
+              onClick={handleRunJs}
+              disabled={isRunningJs || !jsCode.trim()}
+              className="mt-2 bg-primary text-primary-foreground hover:bg-primary/90"
+              size="sm"
+            >
+              {isRunningJs ? (
+                <>
+                  <Loader2 className="w-3 h-3 mr-2 animate-spin" />
+                  Running...
+                </>
+              ) : (
+                <>
+                  <Play className="w-3 h-3 mr-2" />
+                  Run JavaScript
+                </>
+              )}
+            </Button>
+          </div>
+
+          <div className="flex-1 flex flex-col min-h-0 border-t border-border pt-3">
+            <Label className="text-xs text-muted-foreground mb-2">Latest Result</Label>
+            {!jsResult ? (
+              <div className="flex-1 flex items-center justify-center text-muted-foreground text-xs">No JS executions yet</div>
+            ) : (
+              <div className="space-y-3 text-xs overflow-auto">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Exit Code:</span>
+                  <Badge
+                    variant="outline"
+                    className={
+                      jsResult.exitCode === 0 ? "border-success/50 text-success" : "border-destructive/50 text-destructive"
+                    }
+                  >
+                    {jsResult.exitCode}
+                  </Badge>
+                </div>
+
+                {jsResult.result !== undefined && (
+                  <div>
+                    <div className="text-success mb-1">Result</div>
+                    <CodeBlock code={JSON.stringify(jsResult.result, null, 2)} language="json" />
+                  </div>
+                )}
+
+                {jsResult.error !== undefined && (
+                  <div>
+                    <div className="text-destructive mb-1">Error</div>
+                    <CodeBlock code={JSON.stringify(jsResult.error, null, 2)} language="json" />
+                  </div>
+                )}
+
+                <div>
+                  <div className="text-muted-foreground mb-1">stdout</div>
+                  <TerminalOutput text={jsResult.stdout ?? ""} />
+                </div>
+
+                <div>
+                  <div className="text-warning mb-1">stderr</div>
+                  <TerminalOutput text={jsResult.stderr ?? ""} />
+                </div>
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
         {/* Logs Tab */}
         <TabsContent value="logs" className="flex-1 flex flex-col p-4 pt-2 min-h-0">
           {/* Log Type Tabs */}
@@ -592,22 +755,13 @@ export function VMDetailPanel({
               System
             </Button>
             <Button
-              variant={logType === "exec" ? "secondary" : "ghost"}
+              variant={logType === "executions" ? "secondary" : "ghost"}
               size="sm"
-              onClick={() => setLogType("exec")}
+              onClick={() => setLogType("executions")}
               className="h-7 text-xs"
             >
               <Terminal className="w-3 h-3 mr-1" />
-              Exec
-            </Button>
-            <Button
-              variant={logType === "ts" ? "secondary" : "ghost"}
-              size="sm"
-              onClick={() => setLogType("ts")}
-              className="h-7 text-xs"
-            >
-              <Code className="w-3 h-3 mr-1" />
-              TypeScript
+              Executions
             </Button>
             <div className="flex-1" />
             {logsUpdatedAt && (
@@ -631,65 +785,106 @@ export function VMDetailPanel({
               </>
             )}
 
-            {logType === "exec" && (
+            {logType === "executions" && (
               <>
-                {commandOutput.length === 0 ? (
-                  <span className="text-muted-foreground">No exec history yet. Run commands in the Exec tab.</span>
+                {execLogsError ? (
+                  <div className="text-destructive">{execLogsError}</div>
+                ) : execLogs.length === 0 ? (
+                  <span className="text-muted-foreground">
+                    {execLogsLoading ? "Loading executions..." : "No execution logs yet."}
+                  </span>
                 ) : (
-                  <div className="space-y-1">
-                    {commandOutput.map((line, i) => (
-                      <div key={i} className={line.startsWith("$") ? "text-primary" : "text-foreground"}>
-                        {line}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </>
-            )}
-
-            {logType === "ts" && (
-              <>
-                {tsExecutions.length === 0 ? (
-                  <span className="text-muted-foreground">No TS executions yet. Run code in the TS tab.</span>
-                ) : (
-                  <div className="space-y-4">
-                    {tsExecutions.map((exec) => (
-                      <div key={exec.id} className="border-b border-border pb-3 last:border-0">
-                        <div className="flex items-center gap-2 mb-2">
-                          {exec.result.exitCode === 0 ? (
-                            <CheckCircle2 className="w-3 h-3 text-success" />
+                  <div className="flex gap-3 min-h-0">
+                    {/* List */}
+                    <div className="w-44 shrink-0 overflow-auto border-r border-border pr-2">
+                      {execLogs.map((e) => (
+                        <div
+                          key={e.id}
+                          onClick={() => setSelectedExecLog(e)}
+                          className={`p-2 rounded cursor-pointer text-xs mb-1 flex items-center gap-2 ${
+                            selectedExecLog?.id === e.id
+                              ? "bg-primary/10 border border-primary/30"
+                              : "hover:bg-secondary"
+                          }`}
+                        >
+                          {e.result.exitCode === 0 ? (
+                            <CheckCircle2 className="w-3 h-3 text-success shrink-0" />
                           ) : (
-                            <AlertCircle className="w-3 h-3 text-destructive" />
+                            <AlertCircle className="w-3 h-3 text-destructive shrink-0" />
                           )}
-                          <span className="text-muted-foreground">{exec.timestamp.toLocaleString()}</span>
-                          <Badge variant="outline" className="text-[10px] px-1">
-                            exit {exec.result.exitCode}
-                          </Badge>
-                        </div>
-                        {exec.result.result !== undefined && (
-                          <div className="mb-1">
-                            <span className="text-success">result: </span>
-                            <span className="text-foreground">{JSON.stringify(exec.result.result)}</span>
+                          <div className="min-w-0">
+                            <div className="truncate text-muted-foreground">
+                              {new Date(e.timestamp).toLocaleTimeString()}
+                            </div>
+                            <div className="truncate text-foreground/80">{e.type}</div>
                           </div>
-                        )}
-                        {exec.result.error !== undefined && (
-                          <div className="mb-1">
-                            <span className="text-destructive">error: </span>
-                            <span className="text-foreground">
-                              {typeof exec.result.error === "string"
-                                ? exec.result.error
-                                : JSON.stringify(exec.result.error)}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Detail */}
+                    <div className="flex-1 overflow-auto space-y-3">
+                      {selectedExecLog ? (
+                        <>
+                          <div className="flex items-center gap-2">
+                            <Badge variant="outline" className="text-[10px] px-1">
+                              {selectedExecLog.type}
+                            </Badge>
+                            <Badge variant="outline" className="text-[10px] px-1">
+                              exit {selectedExecLog.result.exitCode}
+                            </Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {new Date(selectedExecLog.timestamp).toLocaleString()} · {selectedExecLog.durationMs}ms
                             </span>
                           </div>
-                        )}
-                        {exec.result.stdout && (
-                          <div className="text-foreground whitespace-pre-wrap">{exec.result.stdout}</div>
-                        )}
-                        {exec.result.stderr && (
-                          <div className="text-warning whitespace-pre-wrap">{exec.result.stderr}</div>
-                        )}
-                      </div>
-                    ))}
+
+                          <div>
+                            <div className="text-muted-foreground mb-1">Input</div>
+                            {selectedExecLog.type === "exec" ? (
+                              <CodeBlock code={selectedExecLog.input.cmd ?? ""} language="bash" />
+                            ) : selectedExecLog.type === "run-ts" ? (
+                              selectedExecLog.input.code ? (
+                                <CodeBlock code={selectedExecLog.input.code} language="ts" />
+                              ) : (
+                                <CodeBlock code={selectedExecLog.input.path ?? ""} language="text" />
+                              )
+                            ) : selectedExecLog.input.code ? (
+                              <CodeBlock code={selectedExecLog.input.code} language="js" />
+                            ) : (
+                              <CodeBlock code={selectedExecLog.input.path ?? ""} language="text" />
+                            )}
+                          </div>
+
+                          {selectedExecLog.result.result !== undefined && (
+                            <div>
+                              <div className="text-success mb-1">Result</div>
+                              <CodeBlock code={JSON.stringify(selectedExecLog.result.result, null, 2)} language="json" />
+                            </div>
+                          )}
+
+                          {selectedExecLog.result.error !== undefined && (
+                            <div>
+                              <div className="text-destructive mb-1">Error</div>
+                              <CodeBlock code={JSON.stringify(selectedExecLog.result.error, null, 2)} language="json" />
+                            </div>
+                          )}
+
+                          <div>
+                            <div className="text-muted-foreground mb-1">stdout</div>
+                            <TerminalOutput text={selectedExecLog.result.stdout ?? ""} />
+                          </div>
+
+                          <div>
+                            <div className="text-warning mb-1">stderr</div>
+                            <TerminalOutput text={selectedExecLog.result.stderr ?? ""} />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex items-center justify-center h-full text-muted-foreground text-xs">
+                          Select an execution to view details
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
               </>

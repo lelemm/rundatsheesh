@@ -7,6 +7,7 @@ import type { SnapshotMeta } from "../types/snapshot.js";
 import { HttpError } from "../api/httpErrors.js";
 import type { ActivityService } from "../telemetry/activityService.js";
 import type { ImageService } from "./imageService.js";
+import { ExecLogService } from "./execLogService.js";
 
 const LOG_FILES = new Set(["firecracker.log", "firecracker.stdout.log", "firecracker.stderr.log"]);
 
@@ -43,6 +44,7 @@ export class VmService {
   private readonly limits: NonNullable<VmServiceOptions["limits"]>;
   private readonly dnsServerIp?: string;
   private nextVsockCid: number;
+  private readonly execLogs: ExecLogService;
 
   constructor(options: VmServiceOptions) {
     this.store = options.store;
@@ -54,6 +56,7 @@ export class VmService {
     this.activity = options.activity;
     this.snapshots = options.snapshots;
     this.dnsServerIp = options.dnsServerIp;
+    this.execLogs = new ExecLogService();
     this.limits = options.limits ?? {
       maxVms: 20,
       maxCpu: 4,
@@ -476,16 +479,21 @@ export class VmService {
     }
     await this.store.update(vm.id, { state: "STOPPING" });
 
-    // Best-effort filesystem sync before stopping
-    await this.agentClient.exec(vm.id, { cmd: "sync" }).catch(() => undefined);
+    // Best-effort filesystem sync before stopping.
+    // NOTE: the `sync` syscall may return before all writes reach the block device, so give the guest a moment.
+    await this.agentClient.exec(vm.id, { cmd: "sync; sync; sync" }).catch(() => undefined);
+    await new Promise((resolve) => setTimeout(resolve, 2500));
 
-    // Save the rootfs to persistent storage before firecracker.stop() cleans up the jailer directory.
-    // This preserves user data across stop/start cycles.
+    // Stop the VM first so we don't clone the disk while it's being written to.
+    await this.firecracker.stop(vm);
+
+    // Now that the VM is stopped, clone the rootfs to persistent storage.
     const tSaveStart = Date.now();
     await this.storage.saveDiskToPersistent(vm.id, vm.rootfsPath);
     const saveMs = Date.now() - tSaveStart;
 
-    await this.firecracker.stop(vm);
+    // Clean up the jailer runtime dir so a later `start` can recreate it cleanly.
+    await this.storage.cleanupJailerVmDir(vm.id).catch(() => undefined);
     // Tear down host networking so a later `start` can recreate the tap cleanly.
     await this.network.teardown(vm, vm.tapName).catch(() => undefined);
     await this.store.update(vm.id, { state: "STOPPED" });
@@ -530,7 +538,24 @@ export class VmService {
     if (typeof payload.timeoutMs === "number" && payload.timeoutMs > this.limits.maxExecTimeoutMs) {
       throw new HttpError(400, `timeoutMs exceeds maxExecTimeoutMs=${this.limits.maxExecTimeoutMs}`);
     }
+    const startedAt = Date.now();
     const result = await this.agentClient.exec(vm.id, payload);
+    const durationMs = Date.now() - startedAt;
+    await this.execLogs
+      .append(
+        vm.logsDir,
+        this.execLogs.buildEntry({
+          type: "exec",
+          input: {
+            cmd: payload.cmd,
+            timeoutMs: payload.timeoutMs,
+            env: payload.env ? Object.entries(payload.env).map(([k, v]) => `${k}=${String(v ?? "")}`) : undefined
+          },
+          result,
+          durationMs
+        })
+      )
+      .catch(() => undefined);
     await this.activity?.logEvent({
       type: "exec.command",
       entityType: "vm",
@@ -549,12 +574,77 @@ export class VmService {
     if (typeof payload.timeoutMs === "number" && payload.timeoutMs > this.limits.maxRunTsTimeoutMs) {
       throw new HttpError(400, `timeoutMs exceeds maxRunTsTimeoutMs=${this.limits.maxRunTsTimeoutMs}`);
     }
+    const startedAt = Date.now();
     const result = await this.agentClient.runTs(vm.id, { ...payload, allowNet: vm.outboundInternet });
+    const durationMs = Date.now() - startedAt;
+    await this.execLogs
+      .append(
+        vm.logsDir,
+        this.execLogs.buildEntry({
+          type: "run-ts",
+          input: {
+            path: payload.path,
+            code: payload.code,
+            args: payload.args,
+            env: payload.env,
+            denoFlags: payload.denoFlags,
+            timeoutMs: payload.timeoutMs
+          },
+          result,
+          durationMs
+        })
+      )
+      .catch(() => undefined);
     await this.activity?.logEvent({
       type: "runTs.executed",
       entityType: "vm",
       entityId: vm.id,
       message: "Run TypeScript",
+      meta: {
+        path: payload.path,
+        hasInlineCode: Boolean(payload.code),
+        timeoutMs: payload.timeoutMs,
+        exitCode: result.exitCode
+      }
+    });
+    return result;
+  }
+
+  async runJs(
+    id: string,
+    payload: { path?: string; code?: string; args?: string[]; nodeFlags?: string[]; timeoutMs?: number; env?: string[] }
+  ) {
+    const vm = await this.requireVm(id);
+    // Reuse maxRunTsTimeoutMs for run-js for now (same class of operation: long-running code execution).
+    if (typeof payload.timeoutMs === "number" && payload.timeoutMs > this.limits.maxRunTsTimeoutMs) {
+      throw new HttpError(400, `timeoutMs exceeds maxRunTsTimeoutMs=${this.limits.maxRunTsTimeoutMs}`);
+    }
+    const startedAt = Date.now();
+    const result = await this.agentClient.runJs(vm.id, payload);
+    const durationMs = Date.now() - startedAt;
+    await this.execLogs
+      .append(
+        vm.logsDir,
+        this.execLogs.buildEntry({
+          type: "run-js",
+          input: {
+            path: payload.path,
+            code: payload.code,
+            args: payload.args,
+            env: payload.env,
+            nodeFlags: payload.nodeFlags,
+            timeoutMs: payload.timeoutMs
+          },
+          result,
+          durationMs
+        })
+      )
+      .catch(() => undefined);
+    await this.activity?.logEvent({
+      type: "runJs.executed",
+      entityType: "vm",
+      entityId: vm.id,
+      message: "Run JavaScript",
       meta: {
         path: payload.path,
         hasInlineCode: Boolean(payload.code),

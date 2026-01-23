@@ -1,6 +1,6 @@
 {
   "name": "n8n-nodes-run-dat-sheesh",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "n8n community nodes for run-dat-sheesh manager API",
   "license": "MIT",
   "homepage": "https://github.com/your-org/run-dat-sheesh",

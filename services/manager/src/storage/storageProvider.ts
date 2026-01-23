@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { StorageProvider } from "../types/interfaces.js";
-import { jailerRootDir } from "../firecracker/socketPaths.js";
+import { jailerRootDir, jailerVmDir } from "../firecracker/socketPaths.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -69,6 +69,10 @@ export class LocalStorageProvider implements StorageProvider {
     // VM metadata lives under STORAGE_ROOT/<vmId>, while runtime artifacts live under the jailer chroot base.
     await fs.rm(path.join(this.options.storageRoot, vmId), { recursive: true, force: true });
     await fs.rm(path.join(this.options.jailerChrootBaseDir, vmId), { recursive: true, force: true });
+  }
+
+  async cleanupJailerVmDir(vmId: string): Promise<void> {
+    await fs.rm(jailerVmDir(this.options.jailerChrootBaseDir, vmId), { recursive: true, force: true });
   }
 
   /**

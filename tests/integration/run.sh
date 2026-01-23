@@ -75,7 +75,9 @@ compute_dev_args
 
 # Best-effort cleanup from prior interrupted runs.
 # This prefix is used by the vitest suite itself (see integration.test.ts).
-rm -rf /tmp/run-dat-sheesh-it-* >/dev/null 2>&1 || true
+# Docker may create root-owned files, so try normal rm first, then sudo if needed.
+rm -rf /tmp/run-dat-sheesh-it-* >/dev/null 2>&1 || \
+  sudo rm -rf /tmp/run-dat-sheesh-it-* >/dev/null 2>&1 || true
 
 echo "Building guest artifacts (kernel + rootfs)..."
 make -C "$ROOT_DIR" guest-images
@@ -139,11 +141,16 @@ cleanup() {
     docker logs "${CID:-}" || true
   fi
   if [ -n "${CID:-}" ]; then
+    # Have the container clean up root-owned files before stopping
+    docker exec "$CID" rm -rf /var/lib/run-dat-sheesh/* >/dev/null 2>&1 || true
     docker stop "$CID" >/dev/null 2>&1 || true
     docker rm -f "$CID" >/dev/null 2>&1 || true
   fi
-  rm -rf "${RDS_DATA_DIR:-}" >/dev/null 2>&1 || true
-  rm -rf "${RDS_IMAGES_DIR:-}" >/dev/null 2>&1 || true
+  # Clean up the temp directories. If files are still root-owned, try sudo.
+  rm -rf "${RDS_DATA_DIR:-}" >/dev/null 2>&1 || \
+    sudo rm -rf "${RDS_DATA_DIR:-}" >/dev/null 2>&1 || true
+  rm -rf "${RDS_IMAGES_DIR:-}" >/dev/null 2>&1 || \
+    sudo rm -rf "${RDS_IMAGES_DIR:-}" >/dev/null 2>&1 || true
 }
 on_signal() {
   FAILED=1

@@ -166,6 +166,16 @@ async function vmRunTs(vmId: string, code: string): Promise<ExecResult> {
   return json;
 }
 
+async function vmRunJs(vmId: string, code: string): Promise<ExecResult> {
+  const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/run-js`, { code });
+  expect(status).toBe(200);
+  if (json.exitCode !== 0) {
+    // eslint-disable-next-line no-console
+    console.error("[it] run-js nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr });
+  }
+  return json;
+}
+
 async function vmRunTsWithEnv(vmId: string, code: string, env: string[]): Promise<ExecResult> {
   const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/run-ts`, { code, env });
   expect(status).toBe(200);
@@ -176,8 +186,24 @@ async function vmRunTsWithEnv(vmId: string, code: string, env: string[]): Promis
   return json;
 }
 
+async function vmRunJsWithEnv(vmId: string, code: string, env: string[]): Promise<ExecResult> {
+  const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/run-js`, { code, env });
+  expect(status).toBe(200);
+  if (json.exitCode !== 0) {
+    // eslint-disable-next-line no-console
+    console.error("[it] run-js(env) nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr });
+  }
+  return json;
+}
+
 async function vmRunTsPath(vmId: string, path: string): Promise<ExecResult> {
   const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/run-ts`, { path });
+  expect(status).toBe(200);
+  return json;
+}
+
+async function vmRunJsPath(vmId: string, path: string): Promise<ExecResult> {
+  const { status, json } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/run-js`, { path });
   expect(status).toBe(200);
   return json;
 }
@@ -522,6 +548,46 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     const ts = await vmRunTs(vmOk, "console.log(2 + 2)");
     expect(ts.exitCode).toBe(0);
     expect(ts.stdout.trim()).toBe("4");
+  });
+
+  it("run-js: returns stdout", async () => {
+    const js = await vmRunJs(vmOk, "console.log(2 + 2)");
+    expect(js.exitCode).toBe(0);
+    expect(js.stdout.trim()).toBe("4");
+  });
+
+  it("run-js: env array is available via process.env", async () => {
+    const key = "IT_SECRET_JS";
+    const value = `hello-${Date.now()}`;
+    const res = await vmRunJsWithEnv(
+      vmOk,
+      [
+        `const v = process.env[${JSON.stringify(key)}];`,
+        `if (!v) { console.error("missing"); process.exit(2); }`,
+        "console.log(v);"
+      ].join("\n"),
+      [`${key}=${value}`]
+    );
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain(value);
+  });
+
+  it("run-js: can return a structured result via global result.set()", async () => {
+    const res = await vmRunJs(vmOk, ["result.set({ ok: true, n: 123 });", "console.log('done');"].join("\n"));
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain("done");
+    expect(res.result).toEqual({ ok: true, n: 123 });
+  });
+
+  it("run-js: can return a structured error via global result.error()", async () => {
+    const res = await vmRunJs(vmOk, ["result.error({ code: 'E_TEST', detail: 'boom' });", "console.log('after');"].join("\n"));
+    expect(res.exitCode).not.toBe(0);
+    expect(res.error).toEqual({ code: "E_TEST", detail: "boom" });
+  });
+
+  it("run-js: rejects /home/user path inputs (workspace-only contract)", async () => {
+    const { status } = await apiJson<ExecResult>("POST", `${MANAGER_BASE}/v1/vms/${vmOk}/run-js`, { path: "/home/user/app/main.js" });
+    expect(status).toBe(400);
   });
 
   it("run-ts (deno): runs in the chroot jail and uses /workspace", async () => {
