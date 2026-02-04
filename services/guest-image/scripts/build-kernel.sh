@@ -33,6 +33,8 @@ fi
 ./scripts/config -e VIRTIO -e VIRTIO_MMIO -e VIRTIO_MMIO_CMDLINE_DEVICES -e VIRTIO_BLK -e VIRTIO_NET
 ./scripts/config -e VSOCKETS -e VIRTIO_VSOCKETS -e VIRTIO_VSOCKETS_COMMON
 ./scripts/config -e SERIAL_8250 -e SERIAL_8250_CONSOLE -e SERIAL_CORE -e SERIAL_CORE_CONSOLE
+# Enable overlayfs for copy-on-write root filesystem (base rootfs + per-VM overlay)
+./scripts/config -e OVERLAY_FS
 make olddefconfig
 make -j"$(nproc)" vmlinux
 

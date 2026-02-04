@@ -214,29 +214,37 @@ chmod +x "$ROOTFS_DIR/tmp/provision.sh"
 chroot "$ROOTFS_DIR" /bin/bash /tmp/provision.sh
 rm -f "$ROOTFS_DIR/tmp/provision.sh"
 
-# Install Deno with retry logic (downloads can occasionally fail with bad CRC)
-mkdir -p "$ROOTFS_DIR/tmp"
-for attempt in 1 2 3; do
-  echo "Deno install attempt ${attempt}/3"
-  curl -L "https://deno.land/install.sh" -o "$ROOTFS_DIR/tmp/install-deno.sh"
-  # Clear any partial/corrupt previous install
-  rm -rf "$ROOTFS_DIR/home/user/.deno/bin/deno" || true
-  if chroot "$ROOTFS_DIR" /bin/bash -c "su - user -c 'DENO_INSTALL=/home/user/.deno bash /tmp/install-deno.sh'"; then
-    # Verify the binary is functional
-    if chroot "$ROOTFS_DIR" /bin/bash -c "su - user -c '/home/user/.deno/bin/deno --version'" >/dev/null 2>&1; then
-      echo "Deno installed successfully"
-      break
-    else
-      echo "Deno binary verification failed, retrying..."
+# Install Deno
+# Use pre-downloaded binary if available (from Docker build), otherwise download with retry
+if [ -n "${DENO_PREBUILT:-}" ] && [ -x "$DENO_PREBUILT" ]; then
+  echo "Using pre-downloaded Deno binary from $DENO_PREBUILT"
+  mkdir -p "$ROOTFS_DIR/home/user/.deno/bin"
+  cp "$DENO_PREBUILT" "$ROOTFS_DIR/home/user/.deno/bin/deno"
+  chmod +x "$ROOTFS_DIR/home/user/.deno/bin/deno"
+  chown -R 1000:1000 "$ROOTFS_DIR/home/user/.deno"
+else
+  echo "Downloading Deno via install script (no pre-built binary available)..."
+  mkdir -p "$ROOTFS_DIR/tmp"
+  for attempt in 1 2 3; do
+    echo "Deno install attempt ${attempt}/3"
+    curl -L "https://deno.land/install.sh" -o "$ROOTFS_DIR/tmp/install-deno.sh"
+    rm -rf "$ROOTFS_DIR/home/user/.deno/bin/deno" || true
+    if chroot "$ROOTFS_DIR" /bin/bash -c "su - user -c 'DENO_INSTALL=/home/user/.deno bash /tmp/install-deno.sh'"; then
+      if chroot "$ROOTFS_DIR" /bin/bash -c "su - user -c '/home/user/.deno/bin/deno --version'" >/dev/null 2>&1; then
+        echo "Deno installed successfully"
+        break
+      else
+        echo "Deno binary verification failed, retrying..."
+      fi
     fi
-  fi
-  if [ "$attempt" -eq 3 ]; then
-    echo "Deno installation failed after 3 attempts" >&2
-    exit 1
-  fi
-  sleep 2
-done
-rm -f "$ROOTFS_DIR/tmp/install-deno.sh"
+    if [ "$attempt" -eq 3 ]; then
+      echo "Deno installation failed after 3 attempts" >&2
+      exit 1
+    fi
+    sleep 2
+  done
+  rm -f "$ROOTFS_DIR/tmp/install-deno.sh"
+fi
 
 # Stage Deno + GNU tar into the /exec sandbox so /run-ts and files tar operations can run chrooted.
 cat >"$ROOTFS_DIR/tmp/stage-deno-tar-into-sandbox.sh" <<'EOF'

@@ -1501,5 +1501,116 @@ result.set({
       await deleteVm(vm.id);
     }
   }, 120_000); // 2 minute timeout for power cycle operations
+
+  // ============== OverlayFS Tests ==============
+
+  it("overlayfs: writes to /tmp are isolated between VMs", async () => {
+    // Create two VMs
+    const vmA = await createVm({ cpu: 1, memMb: 256, allowIps: [], outboundInternet: false });
+    const vmB = await createVm({ cpu: 1, memMb: 256, allowIps: [], outboundInternet: false });
+
+    try {
+      // Write a file to /tmp in VM A (outside /home/user - tests overlay isolation)
+      const writeA = await vmRunTs(
+        vmA.id,
+        [
+          'await Deno.writeTextFile("/tmp/vm-a-marker.txt", "from-vm-a");',
+          'console.log("written");'
+        ].join("\n")
+      );
+      expect(writeA.exitCode).toBe(0);
+      expect(writeA.stdout.trim()).toBe("written");
+
+      // Verify VM B does NOT see this file (proves overlay isolation)
+      const readB = await vmRunTs(
+        vmB.id,
+        [
+          "try {",
+          '  await Deno.readTextFile("/tmp/vm-a-marker.txt");',
+          '  console.log("found");',
+          "} catch {",
+          '  console.log("not-found");',
+          "}"
+        ].join("\n")
+      );
+      expect(readB.stdout.trim()).toBe("not-found");
+    } finally {
+      await deleteVm(vmA.id);
+      await deleteVm(vmB.id);
+    }
+  });
+
+  it("overlayfs: can write to /tmp and /var/tmp", async () => {
+    const vm = await createVm({ cpu: 1, memMb: 256, allowIps: [], outboundInternet: false });
+
+    try {
+      const res = await vmRunTs(
+        vm.id,
+        [
+          "// Write to /tmp",
+          'await Deno.writeTextFile("/tmp/test.txt", "tmp-ok");',
+          "",
+          "// Write to /var/tmp (commonly used by apps)",
+          'await Deno.mkdir("/var/tmp", { recursive: true });',
+          'await Deno.writeTextFile("/var/tmp/test.txt", "var-tmp-ok");',
+          "",
+          "// Read back",
+          'const tmp = await Deno.readTextFile("/tmp/test.txt");',
+          'const varTmp = await Deno.readTextFile("/var/tmp/test.txt");',
+          'console.log(tmp + "," + varTmp);'
+        ].join("\n")
+      );
+      expect(res.exitCode).toBe(0);
+      expect(res.stdout.trim()).toBe("tmp-ok,var-tmp-ok");
+    } finally {
+      await deleteVm(vm.id);
+    }
+  });
+
+  it("overlayfs: VM creation is fast (< 2s threshold)", async () => {
+    const started = Date.now();
+    const vm = await createVm({ cpu: 1, memMb: 256, allowIps: [], outboundInternet: false });
+    const createMs = Date.now() - started;
+
+    try {
+      // With overlayfs, VM creation should be fast (hard links + sparse file)
+      // This is a soft check - actual threshold depends on hardware
+      // eslint-disable-next-line no-console
+      console.info("[overlayfs-test] VM creation took", { createMs });
+      // 2s threshold is generous; with overlay it should be < 500ms typically
+      expect(createMs).toBeLessThan(2000);
+    } finally {
+      await deleteVm(vm.id);
+    }
+  });
+
+  it("overlayfs: writes persist within VM lifecycle", async () => {
+    const vm = await createVm({ cpu: 1, memMb: 256, allowIps: [], outboundInternet: false });
+
+    try {
+      // Write to /tmp
+      const write = await vmRunTs(
+        vm.id,
+        [
+          'await Deno.writeTextFile("/tmp/persist-test.txt", "persisted-ok");',
+          'console.log("written");'
+        ].join("\n")
+      );
+      expect(write.exitCode).toBe(0);
+
+      // Read it back in a separate call (proves persistence)
+      const read = await vmRunTs(
+        vm.id,
+        [
+          'const content = await Deno.readTextFile("/tmp/persist-test.txt");',
+          "console.log(content);"
+        ].join("\n")
+      );
+      expect(read.exitCode).toBe(0);
+      expect(read.stdout.trim()).toBe("persisted-ok");
+    } finally {
+      await deleteVm(vm.id);
+    }
+  });
 });
 

@@ -11,6 +11,18 @@ RUN NODE_OPTIONS=--jitless npm run build
 # Keep only runtime deps for the guest image.
 RUN npm prune --omit=dev
 
+# Copy pre-extracted Deno binary (extract locally to avoid Docker COPY corruption)
+FROM debian:bookworm AS deno-downloader
+ARG DENO_VERSION=2.6.8
+ARG DENO_SHA256=8b254e08be2565f608a06bfde3f62f3aabbf8994712f0078c7a7f24bc8c46676
+COPY services/guest-image/deno /deno/deno
+RUN set -eux; \
+  cd /deno; \
+  echo "Verifying SHA256 checksum..."; \
+  echo "${DENO_SHA256}  deno" | sha256sum -c -; \
+  chmod +x deno; \
+  ./deno --version
+
 FROM debian:bookworm AS guest-image-builder
 
 ARG KERNEL_VERSION=5.10.210
@@ -36,10 +48,12 @@ RUN chmod +x /usr/local/bin/build-kernel.sh \
 WORKDIR /rootfs
 ARG DEBIAN_MIRROR=https://deb.debian.org/debian
 ARG DEBIAN_SUITE=bookworm
+# Copy pre-downloaded Deno binary (from deno-downloader stage)
+COPY --from=deno-downloader /deno/deno /usr/local/bin/deno-prebuilt
 COPY services/guest-image/scripts/build-rootfs.sh /usr/local/bin/build-rootfs.sh
 ARG SHELL_VARIANT
 RUN chmod +x /usr/local/bin/build-rootfs.sh \
-  && DEBIAN_MIRROR="${DEBIAN_MIRROR}" DEBIAN_SUITE="${DEBIAN_SUITE}" NODE_VERSION="${NODE_VERSION}" SHELL_VARIANT="${SHELL_VARIANT}" /usr/local/bin/build-rootfs.sh /rootfs
+  && DEBIAN_MIRROR="${DEBIAN_MIRROR}" DEBIAN_SUITE="${DEBIAN_SUITE}" NODE_VERSION="${NODE_VERSION}" SHELL_VARIANT="${SHELL_VARIANT}" DENO_PREBUILT=/usr/local/bin/deno-prebuilt /usr/local/bin/build-rootfs.sh /rootfs
 
 # Ensure Node + npm are available inside the /exec sandbox chroot (/opt/sandbox).
 # The guest-agent executes commands under `chroot /opt/sandbox ...`, so tools must exist there.

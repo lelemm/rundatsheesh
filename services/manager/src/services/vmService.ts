@@ -101,6 +101,7 @@ export class VmService {
     let rootfsPath = "";
     let kernelPath = "";
     let logsDir = "";
+    let overlayPath: string | null = null;
     let imageId: string | undefined;
     if (request.snapshotId) {
       const snap = await this.storage.getSnapshotArtifactPaths(request.snapshotId);
@@ -139,6 +140,7 @@ export class VmService {
       rootfsPath = prepared.rootfsPath;
       logsDir = prepared.logsDir;
       kernelPath = prepared.kernelPath;
+      overlayPath = prepared.overlayPath;
     } else {
       const resolved = await this.images.resolveForVmCreate(request.imageId);
       imageId = resolved.imageId;
@@ -158,6 +160,7 @@ export class VmService {
       rootfsPath = prepared.rootfsPath;
       logsDir = prepared.logsDir;
       kernelPath = prepared.kernelPath;
+      overlayPath = prepared.overlayPath;
     }
     const storageMs = Date.now() - tStorageStart;
 
@@ -173,6 +176,7 @@ export class VmService {
       allowIps: request.allowIps,
       imageId,
       rootfsPath,
+      overlayPath,
       kernelPath,
       logsDir,
       createdAt
@@ -200,7 +204,7 @@ export class VmService {
         await this.firecracker.restoreFromSnapshot(vm, rootfsPath, vm.kernelPath, tapName, {
           memPath: snapshotPaths.memPath,
           statePath: snapshotPaths.statePath
-        });
+        }, vm.overlayPath);
         snapshotLoadMs = Date.now() - tRestoreStart;
 
         await this.store.update(vm.id, { state: "STARTING" });
@@ -265,7 +269,7 @@ export class VmService {
             await this.firecracker.restoreFromSnapshot(vm, rootfsPath, vm.kernelPath, tapName, {
               memPath: snapshotPaths.memPath,
               statePath: snapshotPaths.statePath
-            });
+            }, vm.overlayPath);
             snapshotLoadMs = Date.now() - tRestoreStart;
           } catch (err) {
             // Best-effort fallback: if snapshot restore fails (version mismatch, API incompatibility),
@@ -276,19 +280,19 @@ export class VmService {
             await this.firecracker.destroy(vm).catch(() => undefined);
             await this.network.bringUpTap(tapName).catch(() => undefined);
             const tFirecrackerStart = Date.now();
-            await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName);
+            await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName, vm.overlayPath);
             firecrackerMs = Date.now() - tFirecrackerStart;
           }
         } else {
           await this.network.configure(vm, tapName);
           const tFirecrackerStart = Date.now();
-          await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName);
+          await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName, vm.overlayPath);
           firecrackerMs = Date.now() - tFirecrackerStart;
         }
       } else {
         await this.network.configure(vm, tapName);
         const tFirecrackerStart = Date.now();
-        await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName);
+        await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName, vm.overlayPath);
         firecrackerMs = Date.now() - tFirecrackerStart;
       }
 
@@ -369,7 +373,16 @@ export class VmService {
     const paths = await this.storage.getSnapshotArtifactPaths(snapshotId);
 
     await this.firecracker.createSnapshot(vm, { memPath: paths.memPath, statePath: paths.statePath });
-    await this.storage.cloneDisk(vm.rootfsPath, paths.diskPath);
+
+    // With overlay mode: save the overlay disk (contains all changes)
+    // Without overlay: save the full rootfs (legacy mode)
+    if (vm.overlayPath) {
+      await this.storage.cloneDisk(vm.overlayPath, paths.overlayPath);
+      // Also clone the base rootfs for completeness (or we could just reference the image)
+      await this.storage.cloneDisk(vm.rootfsPath, paths.diskPath);
+    } else {
+      await this.storage.cloneDisk(vm.rootfsPath, paths.diskPath);
+    }
 
     const meta: SnapshotMeta = {
       id: snapshotId,
@@ -379,7 +392,8 @@ export class VmService {
       memMb: vm.memMb,
       imageId: vm.imageId,
       sourceVmId: vm.id,
-      hasDisk: true
+      hasDisk: true,
+      hasOverlay: !!vm.overlayPath
     };
     await fs.writeFile(paths.metaPath, JSON.stringify(meta, null, 2), "utf-8");
     await this.activity?.logEvent({
@@ -416,7 +430,7 @@ export class VmService {
       const tStorageStart = Date.now();
       const image = await this.images.resolveForVmCreate(vm.imageId ?? undefined);
       const persistentDiskPath = this.storage.persistentDiskPath(vm.id);
-      let storageResult: { rootfsPath: string; logsDir: string; kernelPath: string };
+      let storageResult: { rootfsPath: string; logsDir: string; kernelPath: string; overlayPath?: string | null };
 
       if (await this.storage.hasPersistentDisk(vm.id)) {
         // Use the persistent disk which has user data from before stop.
@@ -440,7 +454,8 @@ export class VmService {
       await this.store.update(vm.id, {
         rootfsPath: storageResult.rootfsPath,
         kernelPath: storageResult.kernelPath,
-        logsDir: storageResult.logsDir
+        logsDir: storageResult.logsDir,
+        overlayPath: storageResult.overlayPath
       });
 
       // Fetch updated VM record
@@ -449,7 +464,7 @@ export class VmService {
 
       await this.network.configure(updatedVm, updatedVm.tapName);
       const tFirecrackerStart = Date.now();
-      await this.firecracker.createAndStart(updatedVm, updatedVm.rootfsPath, updatedVm.kernelPath, updatedVm.tapName);
+      await this.firecracker.createAndStart(updatedVm, updatedVm.rootfsPath, updatedVm.kernelPath, updatedVm.tapName, updatedVm.overlayPath);
       const firecrackerMs = Date.now() - tFirecrackerStart;
       const tAgentHealthStart = Date.now();
       await this.agentClient.health(updatedVm.id);

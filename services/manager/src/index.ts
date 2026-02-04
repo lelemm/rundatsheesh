@@ -59,7 +59,9 @@ async function main() {
   const storage = new LocalStorageProvider({
     storageRoot: env.storageRoot,
     jailerChrootBaseDir: env.jailer.chrootBaseDir,
-    rootfsCloneMode: env.rootfsCloneMode
+    rootfsCloneMode: env.rootfsCloneMode,
+    enableOverlay: env.enableOverlay,
+    overlaySizeBytes: env.overlaySizeBytes
   });
 
   const images = new ImageService(db.db as any, db.guestImages as any, db.settings as any, db.vms as any, env.imagesDir, {

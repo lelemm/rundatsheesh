@@ -27,7 +27,7 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
 
   constructor(private readonly options: FirecrackerOptions) {}
 
-  async createAndStart(vm: VmRecord, rootfsPath: string, kernelPath: string, tapName: string): Promise<void> {
+  async createAndStart(vm: VmRecord, rootfsPath: string, kernelPath: string, tapName: string, overlayPath?: string | null): Promise<void> {
     const jailRoot = jailerRootDir(this.options.jailerChrootBaseDir, vm.id);
     const apiSockHost = firecrackerApiSocketPath(this.options.jailerChrootBaseDir, vm.id);
     await fs.rm(apiSockHost, { force: true }).catch(() => undefined);
@@ -133,9 +133,13 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
     const kernelInChroot = inChrootPathForHostPath(jailRoot, kernelPath);
     const rootfsInChroot = inChrootPathForHostPath(jailRoot, rootfsPath);
 
+    // Determine if we're using overlay mode (read-only base + overlay disk)
+    const useOverlay = !!overlayPath;
+
     await this.request(apiSockHost, "PUT", "/boot-source", {
       kernel_image_path: kernelInChroot,
       // rootfs is attached as the first virtio-blk device (typically /dev/vda)
+      // overlay disk (if present) is attached as /dev/vdb
       boot_args:
         [
           "console=ttyS0,115200",
@@ -145,7 +149,9 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
           "pci=off",
           "root=/dev/vda",
           "rootfstype=ext4",
-          "rw",
+          // With overlay: mount root read-only, init will set up overlayfs
+          // Without overlay: mount root read-write (legacy mode)
+          useOverlay ? "ro" : "rw",
           "rootwait",
           "init=/sbin/init",
           // Bring up guest networking without userspace DHCP/systemd.
@@ -154,12 +160,26 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
         ].join(" ")
     });
 
+    // Configure base rootfs drive
     await this.request(apiSockHost, "PUT", "/drives/rootfs", {
       drive_id: "rootfs",
       path_on_host: rootfsInChroot,
       is_root_device: true,
-      is_read_only: false
+      // With overlay: base rootfs is read-only (shared across VMs)
+      // Without overlay: base rootfs is read-write (legacy mode)
+      is_read_only: useOverlay
     });
+
+    // If overlay is enabled, add the overlay disk as a second drive
+    if (overlayPath) {
+      const overlayInChroot = inChrootPathForHostPath(jailRoot, overlayPath);
+      await this.request(apiSockHost, "PUT", "/drives/overlay", {
+        drive_id: "overlay",
+        path_on_host: overlayInChroot,
+        is_root_device: false,
+        is_read_only: false
+      });
+    }
 
     await this.request(apiSockHost, "PUT", "/network-interfaces/eth0", {
       iface_id: "eth0",
@@ -184,7 +204,8 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
     rootfsPath: string,
     kernelPath: string,
     tapName: string,
-    snapshot: { memPath: string; statePath: string }
+    snapshot: { memPath: string; statePath: string },
+    overlayPath?: string | null
   ): Promise<void> {
     const jailRoot = jailerRootDir(this.options.jailerChrootBaseDir, vm.id);
     const apiSockHost = firecrackerApiSocketPath(this.options.jailerChrootBaseDir, vm.id);
@@ -280,6 +301,9 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
     const kernelInChroot = inChrootPathForHostPath(jailRoot, kernelPath);
     const rootfsInChroot = inChrootPathForHostPath(jailRoot, rootfsPath);
 
+    // Determine if we're using overlay mode
+    const useOverlay = !!overlayPath;
+
     await this.request(apiSockHost, "PUT", "/boot-source", {
       kernel_image_path: kernelInChroot,
       boot_args:
@@ -291,7 +315,7 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
           "pci=off",
           "root=/dev/vda",
           "rootfstype=ext4",
-          "rw",
+          useOverlay ? "ro" : "rw",
           "rootwait",
           "init=/sbin/init",
           `ip=${vm.guestIp}::172.16.0.1:255.255.255.0::eth0:off`
@@ -302,8 +326,19 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
       drive_id: "rootfs",
       path_on_host: rootfsInChroot,
       is_root_device: true,
-      is_read_only: false
+      is_read_only: useOverlay
     });
+
+    // If overlay is enabled, add the overlay disk as a second drive
+    if (overlayPath) {
+      const overlayInChroot = inChrootPathForHostPath(jailRoot, overlayPath);
+      await this.request(apiSockHost, "PUT", "/drives/overlay", {
+        drive_id: "overlay",
+        path_on_host: overlayInChroot,
+        is_root_device: false,
+        is_read_only: false
+      });
+    }
 
     await this.request(apiSockHost, "PUT", "/network-interfaces/eth0", {
       iface_id: "eth0",

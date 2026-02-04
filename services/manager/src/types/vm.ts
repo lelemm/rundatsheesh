@@ -21,6 +21,7 @@ export interface VmRecord {
   allowIps: string[];
   imageId?: string;
   rootfsPath: string;
+  overlayPath?: string | null; // Path to overlay disk when using overlayfs mode
   kernelPath: string;
   logsDir: string;
   createdAt: string;

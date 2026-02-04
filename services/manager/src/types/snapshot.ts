@@ -11,5 +11,6 @@ export interface SnapshotMeta {
   baseRootfsPath?: string;
   sourceVmId?: string;
   hasDisk: boolean;
+  hasOverlay?: boolean; // true if snapshot includes overlay disk (overlayfs mode)
 }
 

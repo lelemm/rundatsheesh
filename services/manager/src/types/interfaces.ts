@@ -9,13 +9,14 @@ export interface VmStore {
 }
 
 export interface FirecrackerManager {
-  createAndStart(vm: VmRecord, rootfsPath: string, kernelPath: string, tapName: string): Promise<void>;
+  createAndStart(vm: VmRecord, rootfsPath: string, kernelPath: string, tapName: string, overlayPath?: string | null): Promise<void>;
   restoreFromSnapshot(
     vm: VmRecord,
     rootfsPath: string,
     kernelPath: string,
     tapName: string,
-    snapshot: { memPath: string; statePath: string }
+    snapshot: { memPath: string; statePath: string },
+    overlayPath?: string | null
   ): Promise<void>;
   createSnapshot(vm: VmRecord, snapshot: { memPath: string; statePath: string }): Promise<void>;
   stop(vm: VmRecord): Promise<void>;
@@ -44,21 +45,28 @@ export interface AgentClient {
   download(vmId: string, path: string): Promise<Buffer>;
 }
 
+export interface VmStorageResult {
+  rootfsPath: string;
+  overlayPath: string | null; // null when overlay is disabled (legacy mode)
+  logsDir: string;
+  kernelPath: string;
+}
+
 export interface StorageProvider {
   prepareVmStorage(
     vmId: string,
     input: { kernelSrcPath: string; baseRootfsPath: string; diskSizeBytes?: number }
-  ): Promise<{ rootfsPath: string; logsDir: string; kernelPath: string }>;
+  ): Promise<VmStorageResult>;
   prepareVmStorageFromDisk(
     vmId: string,
     input: { kernelSrcPath: string; diskSrcPath: string; diskSizeBytes?: number }
-  ): Promise<{ rootfsPath: string; logsDir: string; kernelPath: string }>;
+  ): Promise<VmStorageResult>;
   cleanupVmStorage(vmId: string): Promise<void>;
   /** Remove the jailer runtime directory for a VM (but keep persistent storage under STORAGE_ROOT). */
   cleanupJailerVmDir(vmId: string): Promise<void>;
   getSnapshotArtifactPaths(
     snapshotId: string
-  ): Promise<{ dir: string; memPath: string; statePath: string; diskPath: string; metaPath: string }>;
+  ): Promise<{ dir: string; memPath: string; statePath: string; diskPath: string; overlayPath: string; metaPath: string }>;
   cloneDisk(src: string, dest: string): Promise<void>;
   listSnapshots(): Promise<string[]>;
   readSnapshotMeta(snapshotId: string): Promise<import("./snapshot.js").SnapshotMeta | null>;
