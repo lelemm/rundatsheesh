@@ -87,9 +87,30 @@ static bool file_exists(const char *path) {
   return stat(path, &st) == 0;
 }
 
-// Check if overlay device exists and we should use overlayfs mode
+// Wait for a device to appear with polling and timeout.
+// Returns true if device appeared, false on timeout.
+static bool wait_for_device(const char *path, int timeout_ms) {
+  const int poll_interval_ms = 10;
+  int elapsed = 0;
+  while (elapsed < timeout_ms) {
+    if (file_exists(path)) {
+      if (elapsed > 0) {
+        log_line("[init] device %s appeared after %dms", path, elapsed);
+      }
+      return true;
+    }
+    usleep(poll_interval_ms * 1000);
+    elapsed += poll_interval_ms;
+  }
+  return false;
+}
+
+// Check if overlay device exists and we should use overlayfs mode.
+// Polls for up to 500ms to handle kernel device initialization race.
 static bool should_use_overlay(void) {
-  return file_exists(OVERLAY_DEV);
+  // The overlay device might not be immediately available after devtmpfs mount
+  // due to kernel virtio-blk initialization timing. Poll with a short timeout.
+  return wait_for_device(OVERLAY_DEV, 500);
 }
 
 // Set up overlayfs with the current root as lower and /dev/vdb as upper
@@ -149,14 +170,13 @@ static bool setup_overlay(void) {
     log_line("[init] chdir(/) failed: %s", strerror(errno));
   }
 
-  // Unmount old root (lazy unmount to handle busy mounts)
-  log_line("[init] unmounting old root");
-  if (umount2("/oldroot", MNT_DETACH) != 0) {
-    log_line("[init] umount oldroot failed (non-fatal): %s", strerror(errno));
-  }
-
-  // Remove oldroot directory (best effort)
-  rmdir("/oldroot");
+  // IMPORTANT: Do NOT unmount /oldroot!
+  // The overlay disk is mounted at /oldroot/mnt/overlay, and the overlayfs
+  // has upperdir/workdir pointing to that mount. If we unmount /oldroot,
+  // the overlay disk mount becomes detached and the overlayfs breaks.
+  // Leaving /oldroot mounted is harmless (it's read-only) and keeps the
+  // overlay disk accessible for the overlayfs to function correctly.
+  log_line("[init] keeping old root mounted at /oldroot (required for overlayfs)");
 
   log_line("[init] overlayfs setup complete - root is now copy-on-write");
   return true;
@@ -235,8 +255,12 @@ int main(void) {
     }
   } else {
     log_line("[init] no overlay device, using legacy mode (direct rootfs)");
-    // Legacy mode: root is already mounted, just make sure it's writable
-    // This handles backward compatibility when no overlay disk is provided
+    // Legacy mode: root is already mounted, just make sure it's writable.
+    // If the root was mounted read-only (e.g., overlay mode was expected but device
+    // didn't appear), try to remount read-write as a fallback.
+    if (mount(NULL, "/", NULL, MS_REMOUNT, NULL) != 0) {
+      log_line("[init] remount rw failed: %s (continuing anyway)", strerror(errno));
+    }
   }
 
   // Start services (guest-agent, socat)
