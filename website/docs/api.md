@@ -28,6 +28,8 @@ All `/v1/*` endpoints require authentication via one of:
 
 Creates and boots a new Firecracker microVM.
 
+With OverlayFS enabled (default), VM creation is near-instant (~50-100ms) because VMs share a read-only base image with per-VM overlay disks for writes. See [Architecture & Storage](/docs/architecture) for details.
+
 ```
 POST /v1/vms
 ```
@@ -378,6 +380,8 @@ mkdir -p out && tar -xzf download.tar.gz -C out
 ## Snapshots
 
 Snapshots capture VM memory, CPU state, and disk contents for fast restore.
+
+When OverlayFS is enabled (default), snapshots are smaller and faster to create because only the overlay disk (containing the VM's writes) is captured, not the full rootfs.
 
 ### List Snapshots
 

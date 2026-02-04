@@ -4,6 +4,16 @@ title: Guest image (kernel + rootfs)
 
 The manager boots Firecracker microVMs from a **kernel** (`vmlinux`) plus a **root filesystem** (`rootfs.ext4`).
 
+## Storage Architecture
+
+By default, run-dat-sheesh uses **OverlayFS** for efficient copy-on-write storage:
+
+- **Base rootfs** is shared read-only across all VMs (hard-linked)
+- Each VM gets a small **overlay disk** (sparse ext4) that stores only its writes
+- This enables near-instant VM creation (~50-100ms) and minimal disk usage per VM
+
+See [Architecture & Storage](./architecture.md) for details.
+
 ## Build a guest image (Debian)
 
 From the repo root:
@@ -31,6 +41,11 @@ At minimum, a compatible image must provide:
 This project uses a tiny C init (`services/guest-image/init/guest-init.c`) compiled into the rootfs as `/sbin/init`.
 
 It is responsible for:
+- **OverlayFS setup** (when enabled):
+  - Mount `/dev/vda` (base rootfs) read-only at `/mnt/lower`
+  - Mount `/dev/vdb` (overlay disk) at `/mnt/overlay`
+  - Create OverlayFS merge at `/mnt/merged`
+  - `pivot_root` to the merged filesystem
 - mounting `/proc`, `/sys`, `/dev`
 - bringing up loopback (`lo`) so `127.0.0.1` works
 - starting the guest agent

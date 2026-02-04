@@ -18,6 +18,7 @@ const sidebars: SidebarsConfig = {
     "requirements",
     "quickstart",
     "build-from-source",
+    "architecture",
     "guest-image",
     "env-vars",
     "api",
