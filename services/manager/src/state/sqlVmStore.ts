@@ -66,6 +66,7 @@ function toRow(vm: VmRecord) {
     allowIps: serializeAllowIps(vm.allowIps),
     imageId: vm.imageId ?? null,
     rootfsPath: vm.rootfsPath,
+    overlayPath: vm.overlayPath ?? null,
     kernelPath: vm.kernelPath,
     logsDir: vm.logsDir,
     createdAt: vm.createdAt,
@@ -86,10 +87,10 @@ function fromRow(row: any): VmRecord {
     allowIps: deserializeAllowIps(row.allowIps),
     imageId: row.imageId ?? undefined,
     rootfsPath: String(row.rootfsPath),
+    overlayPath: row.overlayPath == null ? null : String(row.overlayPath),
     kernelPath: String(row.kernelPath),
     logsDir: String(row.logsDir),
     createdAt: String(row.createdAt),
     provisionMode: row.provisionMode ?? undefined
   };
 }
-

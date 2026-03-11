@@ -29,8 +29,8 @@ export class ExecRunnerImpl implements ExecRunner {
     const args = [
       "run",
       "--quiet",
-      "--allow-read=/workspace,/tmp,/etc/resolv.conf,/etc/hosts,/etc/nsswitch.conf,/etc/ssl/certs/ca-certificates.crt",
-      "--allow-write=/workspace,/tmp"
+      "--allow-read=/workspace,/tmp,/var/tmp,/etc/resolv.conf,/etc/hosts,/etc/nsswitch.conf,/etc/ssl/certs/ca-certificates.crt",
+      "--allow-write=/workspace,/tmp,/var/tmp"
     ];
     if (allowEnvNames.length) {
       // Allow access only to the explicitly provided env vars.

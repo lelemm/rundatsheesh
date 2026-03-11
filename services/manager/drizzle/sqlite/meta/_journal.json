@@ -43,6 +43,13 @@
       "when": 1769091739481,
       "tag": "0005_stale_inertia",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1773263800000,
+      "tag": "0006_overlay_path",
+      "breakpoints": true
     }
   ]
 }

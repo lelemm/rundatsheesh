@@ -145,18 +145,11 @@ flowchart TB
 
 ### Configuration
 
-OverlayFS is **enabled by default**. Configure via environment variables:
+OverlayFS is always enabled. Configure via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENABLE_OVERLAY` | `true` | Enable/disable OverlayFS mode |
 | `OVERLAY_SIZE_BYTES` | `536870912` (512MB) | Max size of per-VM overlay disk (sparse file) |
-
-To disable OverlayFS and use traditional full-copy mode:
-
-```bash
-ENABLE_OVERLAY=false
-```
 
 ---
 
@@ -335,18 +328,9 @@ $STORAGE_ROOT/
 
 ---
 
-## Disabling OverlayFS
+## OverlayFS Requirement
 
-If you need traditional full-copy mode (e.g., for debugging or specific use cases):
-
-```bash
-# In your environment
-ENABLE_OVERLAY=false
-```
-
-In legacy mode:
-- Each VM gets a full copy of the rootfs (using reflink if available)
-- No overlay disk is created
-- The VM boots with a single writable root disk
-
-Note: Legacy mode is slower and uses more disk space, but may be useful for debugging or when OverlayFS causes issues on specific filesystems.
+OverlayFS is the required storage model for VM provisioning:
+- VMs share a read-only base rootfs
+- Each VM gets a per-VM writable overlay disk
+- This keeps startup fast and disk usage low

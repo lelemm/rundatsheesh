@@ -11,13 +11,16 @@ RUN NODE_OPTIONS=--jitless npm run build
 # Keep only runtime deps for the guest image.
 RUN npm prune --omit=dev
 
-# Copy pre-extracted Deno binary (extract locally to avoid Docker COPY corruption)
+# Download Deno during build (no pre-downloaded binary required)
 FROM debian:bookworm AS deno-downloader
 ARG DENO_VERSION=2.6.8
 ARG DENO_SHA256=8b254e08be2565f608a06bfde3f62f3aabbf8994712f0078c7a7f24bc8c46676
-COPY services/guest-image/deno /deno/deno
 RUN set -eux; \
-  cd /deno; \
+  apt-get update && apt-get install -y --no-install-recommends ca-certificates curl unzip \
+  && rm -rf /var/lib/apt/lists/*; \
+  mkdir -p /deno && cd /deno; \
+  curl -sSL -o deno.zip "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip"; \
+  unzip deno.zip && rm deno.zip; \
   echo "Verifying SHA256 checksum..."; \
   echo "${DENO_SHA256}  deno" | sha256sum -c -; \
   chmod +x deno; \

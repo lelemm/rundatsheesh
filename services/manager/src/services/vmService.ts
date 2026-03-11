@@ -430,15 +430,29 @@ export class VmService {
       const tStorageStart = Date.now();
       const image = await this.images.resolveForVmCreate(vm.imageId ?? undefined);
       const persistentDiskPath = this.storage.persistentDiskPath(vm.id);
+      const hadOverlay = Boolean(vm.overlayPath);
       let storageResult: { rootfsPath: string; logsDir: string; kernelPath: string; overlayPath?: string | null };
 
       if (await this.storage.hasPersistentDisk(vm.id)) {
-        // Use the persistent disk which has user data from before stop.
-        // No need to specify diskSizeBytes - the disk already has its size from creation.
-        storageResult = await this.storage.prepareVmStorageFromDisk(vm.id, {
-          kernelSrcPath: image.kernelSrcPath,
-          diskSrcPath: persistentDiskPath
-        });
+        if (hadOverlay) {
+          // Overlay mode: persistent disk contains the writable overlay layer.
+          // Recreate a fresh VM storage layout (base rootfs + overlay disk), then
+          // restore the persisted overlay contents onto the new overlay disk.
+          storageResult = await this.storage.prepareVmStorage(vm.id, {
+            kernelSrcPath: image.kernelSrcPath,
+            baseRootfsPath: image.baseRootfsPath
+          });
+          if (!storageResult.overlayPath) {
+            throw new HttpError(500, "overlay disk was expected for VM restart but is unavailable");
+          }
+          await this.storage.cloneDisk(persistentDiskPath, storageResult.overlayPath);
+        } else {
+          // Legacy mode (no overlay): persistent disk is the full rootfs.
+          storageResult = await this.storage.prepareVmStorageFromDisk(vm.id, {
+            kernelSrcPath: image.kernelSrcPath,
+            diskSrcPath: persistentDiskPath
+          });
+        }
       } else {
         // Fallback: no persistent disk, use base image (this shouldn't happen normally)
         // eslint-disable-next-line no-console
@@ -502,9 +516,11 @@ export class VmService {
     // Stop the VM first so we don't clone the disk while it's being written to.
     await this.firecracker.stop(vm);
 
-    // Now that the VM is stopped, clone the rootfs to persistent storage.
+    // Now that the VM is stopped, clone the writable disk to persistent storage.
+    // In overlay mode that's the overlay disk; in legacy mode it's the rootfs disk.
     const tSaveStart = Date.now();
-    await this.storage.saveDiskToPersistent(vm.id, vm.rootfsPath);
+    const writableDiskPath = vm.overlayPath || vm.rootfsPath;
+    await this.storage.saveDiskToPersistent(vm.id, writableDiskPath);
     const saveMs = Date.now() - tSaveStart;
 
     // Clean up the jailer runtime dir so a later `start` can recreate it cleanly.

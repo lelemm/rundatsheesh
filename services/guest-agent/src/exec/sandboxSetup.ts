@@ -123,12 +123,13 @@ async function ensureResolvConfFromGateway(): Promise<void> {
     .catch(() => undefined);
 }
 
-/**
- * Ensure the /exec sandbox is ready:
- * - chroot root at SANDBOX_ROOT exists and contains a minimal toolchain (provided by the image)
- * - bind-mount real USER_HOME into /home/user and /workspace inside the sandbox
- */
-export async function ensureExecSandboxReady(): Promise<void> {
+let sandboxReadyPromise: Promise<void> | null = null;
+
+async function setupExecSandboxReady(): Promise<void> {
+  // Ensure standard temp paths exist inside the sandbox root.
+  await ensureDir(`${SANDBOX_ROOT}/var/tmp`);
+  await fs.chmod(`${SANDBOX_ROOT}/var/tmp`, 0o1777).catch(() => undefined);
+
   await ensureDir(SANDBOX_ROOT);
   await ensureDir(`${SANDBOX_ROOT}/dev`);
   await ensureDir(`${SANDBOX_ROOT}/proc`);
@@ -159,3 +160,20 @@ export async function ensureExecSandboxReady(): Promise<void> {
   await tryBindMountFileIntoSandbox("/etc/nsswitch.conf");
 }
 
+/**
+ * Ensure the /exec sandbox is ready:
+ * - chroot root at SANDBOX_ROOT exists and contains a minimal toolchain (provided by the image)
+ * - bind-mount real USER_HOME into /home/user and /workspace inside the sandbox
+ */
+export async function ensureExecSandboxReady(): Promise<void> {
+  if (!sandboxReadyPromise) {
+    sandboxReadyPromise = setupExecSandboxReady();
+  }
+  try {
+    await sandboxReadyPromise;
+  } catch (error) {
+    // Allow retries after transient setup failures.
+    sandboxReadyPromise = null;
+    throw error;
+  }
+}

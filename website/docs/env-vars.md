@@ -37,12 +37,10 @@ This page lists env vars used by the **manager** (host side) and **guest agent**
 - `JAILER_GID` (default `1234`)
 
 ### Rootfs provisioning behavior
-- `ROOTFS_CLONE_MODE` (default `auto`): `auto`, `reflink`, or `copy`. Only used when `ENABLE_OVERLAY=false`.
+- `ROOTFS_CLONE_MODE` (default `auto`): `auto`, `reflink`, or `copy`.
 
 ### OverlayFS (copy-on-write storage)
-- `ENABLE_OVERLAY` (default `true`): enable OverlayFS-based copy-on-write storage.
-  - When `true`: VMs share a read-only base rootfs and each VM gets a small sparse overlay disk for writes.
-  - When `false`: each VM gets a full copy of the rootfs (legacy mode).
+- OverlayFS is always enabled: VMs share a read-only base rootfs and each VM gets a sparse overlay disk for writes.
 - `OVERLAY_SIZE_BYTES` (default `536870912` / 512MB): maximum size of the per-VM overlay disk (sparse file, only uses actual disk space for writes).
 
 See [Architecture & Storage](./architecture.md) for details on how OverlayFS improves VM startup time and disk efficiency.
@@ -74,4 +72,3 @@ See [Architecture & Storage](./architecture.md) for details on how OverlayFS imp
 The guest init sets `PORT=8080` when starting the agent.
 
 - `PORT` (default `8080`): HTTP port the guest agent listens on inside the VM.
-

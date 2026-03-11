@@ -60,7 +60,6 @@ async function main() {
     storageRoot: env.storageRoot,
     jailerChrootBaseDir: env.jailer.chrootBaseDir,
     rootfsCloneMode: env.rootfsCloneMode,
-    enableOverlay: env.enableOverlay,
     overlaySizeBytes: env.overlaySizeBytes
   });
 

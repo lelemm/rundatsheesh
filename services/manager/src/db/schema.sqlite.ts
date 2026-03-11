@@ -13,6 +13,7 @@ export const vms = sqliteTable("vms", {
   allowIps: text("allow_ips").notNull(),
   imageId: text("image_id"),
   rootfsPath: text("rootfs_path").notNull(),
+  overlayPath: text("overlay_path"),
   kernelPath: text("kernel_path").notNull(),
   logsDir: text("logs_dir").notNull(),
   createdAt: text("created_at").notNull(),
@@ -66,4 +67,3 @@ export const webhooks = sqliteTable("webhooks", {
   eventTypesJson: text("event_types_json").notNull(),
   createdAt: text("created_at").notNull()
 });
-

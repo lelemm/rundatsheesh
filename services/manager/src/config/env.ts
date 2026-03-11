@@ -19,7 +19,6 @@ export interface EnvConfig {
     gid: number;
   };
   rootfsCloneMode: "auto" | "reflink" | "copy";
-  enableOverlay: boolean;
   overlaySizeBytes: number;
   enableSnapshots: boolean;
   snapshotTemplateCpu: number;
@@ -121,10 +120,7 @@ export function loadEnv(): EnvConfig {
     throw new Error("ROOTFS_CLONE_MODE must be one of: auto, reflink, copy");
   }
 
-  // Overlay mode: use overlayfs for copy-on-write root filesystem
-  // When enabled, base rootfs is shared read-only and each VM gets a small overlay disk
-  const enableOverlay = (process.env.ENABLE_OVERLAY ?? "true").toLowerCase() === "true";
-  // Default overlay size: 512MB (sparse file, only uses space for actual writes)
+  // Overlay mode is always enabled; this controls only the writable overlay disk size.
   const overlaySizeBytes = parsePositiveInt(process.env.OVERLAY_SIZE_BYTES, "OVERLAY_SIZE_BYTES", 512 * 1024 * 1024);
 
   const enableSnapshots = (process.env.ENABLE_SNAPSHOTS ?? "false").toLowerCase() === "true";
@@ -168,7 +164,6 @@ export function loadEnv(): EnvConfig {
       gid: jailerGid
     },
     rootfsCloneMode,
-    enableOverlay,
     overlaySizeBytes,
     enableSnapshots,
     snapshotTemplateCpu,

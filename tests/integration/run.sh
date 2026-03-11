@@ -10,6 +10,13 @@ ADMIN_PASSWORD=${ADMIN_PASSWORD:-dev-password}
 ENABLE_SNAPSHOTS=${ENABLE_SNAPSHOTS:-false}
 SNAPSHOT_TEMPLATE_CPU=${SNAPSHOT_TEMPLATE_CPU:-1}
 SNAPSHOT_TEMPLATE_MEM_MB=${SNAPSHOT_TEMPLATE_MEM_MB:-256}
+# INTEGRATION_IMAGE can be set to run only a specific image variant:
+# - "debian"       - Debian with busybox shell (default)
+# - "debian-bash"  - Debian with bash shell and NVM support
+# - "alpine"       - Alpine with busybox shell
+# - "alpine-bash"  - Alpine with bash shell and NVM support
+# - unset/empty    - run all images
+INTEGRATION_IMAGE=${INTEGRATION_IMAGE:-}
 
 require_dep() {
   local dep="$1"
@@ -64,12 +71,28 @@ wait_for_manager() {
   return 1
 }
 
+validate_integration_image() {
+  case "$1" in
+    ""|debian|debian-bash|alpine|alpine-bash) return 0 ;;
+    *)
+      echo "Invalid INTEGRATION_IMAGE: $1 (expected: debian|debian-bash|alpine|alpine-bash)"
+      return 1
+      ;;
+  esac
+}
+
+should_include_image() {
+  local image="$1"
+  [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "$image" ]
+}
+
 skip_if_missing_kvm
 skip_if_missing_vsock
 require_dep docker || exit 1
 require_dep curl || exit 1
 require_dep make || exit 1
 require_dep node || exit 1
+validate_integration_image "$INTEGRATION_IMAGE" || exit 1
 
 compute_dev_args
 
@@ -126,7 +149,6 @@ CID=$(docker run -d \
   -e IMAGES_DIR=/var/lib/run-dat-sheesh/images \
   -e AGENT_VSOCK_PORT=8080 \
   -e ROOTFS_CLONE_MODE="${ROOTFS_CLONE_MODE:-auto}" \
-  -e ENABLE_OVERLAY="${ENABLE_OVERLAY:-true}" \
   -e OVERLAY_SIZE_BYTES="${OVERLAY_SIZE_BYTES:-536870912}" \
   -e ENABLE_SNAPSHOTS="$ENABLE_SNAPSHOTS" \
   -e SNAPSHOT_TEMPLATE_CPU="$SNAPSHOT_TEMPLATE_CPU" \
@@ -166,7 +188,11 @@ trap cleanup EXIT
 echo "Waiting for manager..."
 wait_for_manager "$API_KEY" || { echo "Manager did not become ready"; FAILED=1; exit 1; }
 
-echo "Uploading Debian + Alpine guest images (all flavors)..."
+if [ -n "$INTEGRATION_IMAGE" ]; then
+  echo "Uploading only selected guest image: $INTEGRATION_IMAGE"
+else
+  echo "Uploading Debian + Alpine guest images (all flavors)..."
+fi
 create_image() {
   local name="$1"
   local description="$2"
@@ -192,26 +218,47 @@ set_default() {
   curl -sf -X POST -H "X-API-Key: $API_KEY" "$MANAGER_BASE/v1/images/$image_id/set-default" >/dev/null
 }
 
-# Debian (busybox) - default image
-DEBIAN_ID=$(create_image "Debian (integration)" "Built by integration runner - busybox shell")
-upload_file "$DEBIAN_ID" "kernel" "$ROOT_DIR/dist/images/debian/vmlinux"
-upload_file "$DEBIAN_ID" "rootfs" "$ROOT_DIR/dist/images/debian/rootfs.ext4"
-set_default "$DEBIAN_ID"
+DEBIAN_ID=""
+DEBIAN_BASH_ID=""
+ALPINE_ID=""
+ALPINE_BASH_ID=""
+DEFAULT_IMAGE_SET=0
 
-# Debian (bash) - with NVM support
-DEBIAN_BASH_ID=$(create_image "Debian Bash (integration)" "Built by integration runner - bash shell with NVM")
-upload_file "$DEBIAN_BASH_ID" "kernel" "$ROOT_DIR/dist/images/debian-bash/vmlinux"
-upload_file "$DEBIAN_BASH_ID" "rootfs" "$ROOT_DIR/dist/images/debian-bash/rootfs.ext4"
+set_default_once() {
+  local image_id="$1"
+  if [ "$DEFAULT_IMAGE_SET" -eq 0 ]; then
+    set_default "$image_id"
+    DEFAULT_IMAGE_SET=1
+  fi
+}
 
-# Alpine (busybox)
-ALPINE_ID=$(create_image "Alpine (integration)" "Built by integration runner - busybox shell")
-upload_file "$ALPINE_ID" "kernel" "$ROOT_DIR/dist/images/alpine/vmlinux"
-upload_file "$ALPINE_ID" "rootfs" "$ROOT_DIR/dist/images/alpine/rootfs.ext4"
+if should_include_image "debian"; then
+  DEBIAN_ID=$(create_image "Debian (integration)" "Built by integration runner - busybox shell")
+  upload_file "$DEBIAN_ID" "kernel" "$ROOT_DIR/dist/images/debian/vmlinux"
+  upload_file "$DEBIAN_ID" "rootfs" "$ROOT_DIR/dist/images/debian/rootfs.ext4"
+  set_default_once "$DEBIAN_ID"
+fi
 
-# Alpine (bash) - with NVM support
-ALPINE_BASH_ID=$(create_image "Alpine Bash (integration)" "Built by integration runner - bash shell with NVM")
-upload_file "$ALPINE_BASH_ID" "kernel" "$ROOT_DIR/dist/images/alpine-bash/vmlinux"
-upload_file "$ALPINE_BASH_ID" "rootfs" "$ROOT_DIR/dist/images/alpine-bash/rootfs.ext4"
+if should_include_image "debian-bash"; then
+  DEBIAN_BASH_ID=$(create_image "Debian Bash (integration)" "Built by integration runner - bash shell with NVM")
+  upload_file "$DEBIAN_BASH_ID" "kernel" "$ROOT_DIR/dist/images/debian-bash/vmlinux"
+  upload_file "$DEBIAN_BASH_ID" "rootfs" "$ROOT_DIR/dist/images/debian-bash/rootfs.ext4"
+  set_default_once "$DEBIAN_BASH_ID"
+fi
+
+if should_include_image "alpine"; then
+  ALPINE_ID=$(create_image "Alpine (integration)" "Built by integration runner - busybox shell")
+  upload_file "$ALPINE_ID" "kernel" "$ROOT_DIR/dist/images/alpine/vmlinux"
+  upload_file "$ALPINE_ID" "rootfs" "$ROOT_DIR/dist/images/alpine/rootfs.ext4"
+  set_default_once "$ALPINE_ID"
+fi
+
+if should_include_image "alpine-bash"; then
+  ALPINE_BASH_ID=$(create_image "Alpine Bash (integration)" "Built by integration runner - bash shell with NVM")
+  upload_file "$ALPINE_BASH_ID" "kernel" "$ROOT_DIR/dist/images/alpine-bash/vmlinux"
+  upload_file "$ALPINE_BASH_ID" "rootfs" "$ROOT_DIR/dist/images/alpine-bash/rootfs.ext4"
+  set_default_once "$ALPINE_BASH_ID"
+fi
 
 if [ "$ENABLE_SNAPSHOTS" = "true" ]; then
   echo "Building template snapshot inside manager container..."
@@ -232,14 +279,6 @@ else
 fi
 
 echo "Running vitest integration suite..."
-
-# INTEGRATION_IMAGE can be set to run only a specific image variant:
-# - "debian"       - Debian with busybox shell (default)
-# - "debian-bash"  - Debian with bash shell and NVM support
-# - "alpine"       - Alpine with busybox shell
-# - "alpine-bash"  - Alpine with bash shell and NVM support
-# - unset/empty    - run all images
-INTEGRATION_IMAGE=${INTEGRATION_IMAGE:-}
 
 if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "debian" ]; then
   echo "=== integration: debian image (busybox) ==="
