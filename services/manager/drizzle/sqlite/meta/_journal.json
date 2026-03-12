@@ -50,6 +50,13 @@
       "when": 1773263800000,
       "tag": "0006_overlay_path",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1773266200000,
+      "tag": "0007_seed_and_pool",
+      "breakpoints": true
     }
   ]
 }

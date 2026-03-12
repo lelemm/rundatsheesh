@@ -12,7 +12,7 @@ import { CopyId } from "@/components/ui/copy-id"
 
 interface Snapshot {
   id: string
-  type: "vm" | "template"
+  type: "user_overlay" | "image_seed" | "vm" | "template"
   createdAt: string
   sourceId?: string
   cpu?: number
@@ -21,7 +21,7 @@ interface Snapshot {
 
 interface ApiSnapshot {
   id: string
-  kind: "vm" | "template"
+  kind: "user_overlay" | "image_seed" | "vm" | "template"
   createdAt: string
   sourceVmId?: string
   cpu?: number
@@ -43,8 +43,8 @@ export function SnapshotsPanel() {
     [snapshots, searchQuery],
   )
 
-  const vmSnapshots = filteredSnapshots.filter((s) => s.type === "vm")
-  const templateSnapshots = filteredSnapshots.filter((s) => s.type === "template")
+  const vmSnapshots = filteredSnapshots.filter((s) => s.type === "user_overlay" || s.type === "vm")
+  const templateSnapshots = filteredSnapshots.filter((s) => s.type === "image_seed" || s.type === "template")
 
   const refresh = async () => {
     setLoading(true)
@@ -109,7 +109,7 @@ export function SnapshotsPanel() {
           <CardHeader>
             <CardTitle className="text-foreground flex items-center gap-2">
               <Server className="w-4 h-4 text-primary" />
-              VM Snapshots
+              User Overlay Snapshots
               <Badge variant="secondary" className="ml-auto">
                 {vmSnapshots.length}
               </Badge>
@@ -167,7 +167,7 @@ export function SnapshotsPanel() {
           <CardHeader>
             <CardTitle className="text-foreground flex items-center gap-2">
               <Layers className="w-4 h-4 text-primary" />
-              Template Snapshots
+              Internal Seed Snapshots
               <Badge variant="secondary" className="ml-auto">
                 {templateSnapshots.length}
               </Badge>

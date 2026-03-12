@@ -175,6 +175,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       const bodyStream = request.body as any;
       await writeStreamToFile(bodyStream, dest, BODY_LIMITS.imageBinary);
       await opts.deps.images.markKernelUploaded(id, "vmlinux");
+      void opts.deps.vmService.ensureImageSeedSnapshot(id);
       await opts.deps.activityService
         ?.logEvent({
           type: "image.kernel_uploaded",
@@ -213,6 +214,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       const bodyStream = request.body as any;
       await writeStreamToFile(bodyStream, dest, BODY_LIMITS.imageBinary);
       await opts.deps.images.markRootfsUploaded(id, "rootfs.ext4");
+      void opts.deps.vmService.ensureImageSeedSnapshot(id);
       await opts.deps.activityService
         ?.logEvent({
           type: "image.rootfs_uploaded",
@@ -277,6 +279,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         await fs.writeFile(path.join(dir, "rootfs.ext4"), rootfsData);
         await opts.deps.images.markRootfsUploaded(id, "rootfs.ext4");
       }
+      void opts.deps.vmService.ensureImageSeedSnapshot(id);
 
       await opts.deps.activityService
         ?.logEvent({
@@ -676,15 +679,24 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     {
       schema: {
         summary: "List snapshots",
-        description: "Lists snapshots stored under STORAGE_ROOT/snapshots, including VM snapshots (with overlay disk baseline when OverlayFS is enabled) and template snapshots.",
+        description:
+          "Lists snapshots stored under STORAGE_ROOT/snapshots. By default returns user overlay snapshots only. Use ?scope=internal|user|all for filtering.",
         tags: ["snapshots"],
+        querystring: {
+          type: "object",
+          properties: {
+            scope: { type: "string", enum: ["user", "internal", "all"] }
+          }
+        },
         response: {
           200: { type: "array", items: { type: "object", additionalProperties: true } }
         }
       }
     },
-    async () => {
-    return opts.deps.vmService.listSnapshots();
+    async (request) => {
+      const scopeRaw = String((request.query as any)?.scope ?? "user").trim().toLowerCase();
+      const scope = scopeRaw === "internal" || scopeRaw === "all" ? (scopeRaw as "internal" | "all") : "user";
+      return opts.deps.vmService.listSnapshots(scope);
     }
   );
 
@@ -694,7 +706,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       schema: {
         summary: "Create snapshot from VM",
         description:
-          "Creates a VM snapshot (Firecracker mem+state) plus a disk baseline. When OverlayFS is enabled (default), only the overlay disk is copied (not the full rootfs), making snapshots faster and smaller. The /workspace content (SDK uploads) is preserved for later restores.",
+          "Creates a user overlay snapshot from the VM writable overlay disk. This is the user-visible snapshot type for layered restores.",
         tags: ["snapshots"],
         params: {
           type: "object",
@@ -866,7 +878,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
       schema: {
         summary: "Create VM",
         description:
-          "Creates and boots a new microVM. Uses OverlayFS copy-on-write storage (when enabled) for near-instant provisioning (~50-100ms) and minimal disk usage - VMs share a read-only base image with per-VM overlay disks for writes. If snapshotId is provided, the VM is restored from that snapshot (including the /workspace disk baseline).",
+          "Creates and boots a new microVM. Uses OverlayFS copy-on-write storage with optional image seed snapshot restore and optional user overlay baseline. `userOverlaySnapshotId` is preferred; `snapshotId` is a backward-compatible alias.",
         tags: ["vms"],
         openapi: {
           requestBody: {
@@ -881,6 +893,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
                     memMb: { type: "number" },
                     allowIps: { type: "array", items: { type: "string" } },
                     outboundInternet: { type: "boolean" },
+                    userOverlaySnapshotId: { type: "string" },
                     snapshotId: { type: "string" },
                     imageId: { type: "string" },
                     diskSizeMb: { type: "number" }
@@ -891,8 +904,16 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
                   withImage: {
                     value: { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, imageId: "img-<uuid>", diskSizeMb: 512 }
                   },
-                  fromSnapshot: {
-                    value: { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: "snap-<uuid>", diskSizeMb: 512 }
+                  fromUserOverlaySnapshot: {
+                    value: {
+                      cpu: 1,
+                      memMb: 256,
+                      allowIps: ["172.16.0.1/32"],
+                      outboundInternet: true,
+                      imageId: "img-<uuid>",
+                      userOverlaySnapshotId: "snap-<uuid>",
+                      diskSizeMb: 512
+                    }
                   }
                 }
               }
@@ -907,14 +928,29 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
             memMb: { type: "number", description: "Memory in MiB" },
             allowIps: { type: "array", items: { type: "string" }, description: "Outbound allowlist (IPv4/CIDR)" },
             outboundInternet: { type: "boolean", description: "Enable outbound internet (still restricted to allowIps)" },
-            snapshotId: { type: "string", description: "Optional snapshot id created via POST /v1/vms/:id/snapshots" },
+            userOverlaySnapshotId: {
+              type: "string",
+              description: "Optional user overlay snapshot id created via POST /v1/vms/:id/snapshots"
+            },
+            snapshotId: {
+              type: "string",
+              description: "Deprecated alias for userOverlaySnapshotId (legacy compatibility)"
+            },
             imageId: { type: "string", description: "Optional guest image id (defaults to the configured default image)" },
             diskSizeMb: { type: "number", description: "Optional disk size (MiB). Must be >= base rootfs size." }
           },
           examples: [
             { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, diskSizeMb: 512 },
             { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, imageId: "img-<uuid>", diskSizeMb: 512 },
-            { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: "snap-<uuid>", diskSizeMb: 512 }
+            {
+              cpu: 1,
+              memMb: 256,
+              allowIps: ["172.16.0.1/32"],
+              outboundInternet: true,
+              imageId: "img-<uuid>",
+              userOverlaySnapshotId: "snap-<uuid>",
+              diskSizeMb: 512
+            }
           ]
         },
         response: {
@@ -943,6 +979,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
             memMb?: number;
             allowIps?: string[];
             outboundInternet?: boolean;
+            userOverlaySnapshotId?: string;
             snapshotId?: string;
             imageId?: string;
             diskSizeMb?: number;
@@ -957,6 +994,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         memMb: body.memMb,
         allowIps: body.allowIps,
         outboundInternet: body.outboundInternet,
+        userOverlaySnapshotId: body.userOverlaySnapshotId,
         snapshotId: body.snapshotId,
         imageId: body.imageId,
         diskSizeMb: body.diskSizeMb

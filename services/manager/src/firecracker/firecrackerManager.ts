@@ -20,6 +20,8 @@ export interface FirecrackerOptions {
   jailerChrootBaseDir: string;
   jailerUid: number;
   jailerGid: number;
+  logLevel?: "Error" | "Warning" | "Info" | "Debug";
+  overlayDeviceWaitMs?: number;
 }
 
 export class FirecrackerManagerImpl implements FirecrackerManager {
@@ -69,7 +71,7 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
         "--log-path",
         fcLogInChroot,
         "--level",
-        "Debug",
+        this.options.logLevel ?? "Warning",
         "--show-level",
         "--show-log-origin",
         "--metrics-path",
@@ -154,6 +156,7 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
           useOverlay ? "ro" : "rw",
           "rootwait",
           "init=/sbin/init",
+          `rds_overlay_wait_ms=${this.options.overlayDeviceWaitMs ?? 200}`,
           // Bring up guest networking without userspace DHCP/systemd.
           // Format: ip=<client-ip>::<gateway-ip>:<netmask>:<hostname>:<device>:<autoconf>
           `ip=${vm.guestIp}::172.16.0.1:255.255.255.0::eth0:off`
@@ -243,7 +246,7 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
         "--log-path",
         fcLogInChroot,
         "--level",
-        "Debug",
+        this.options.logLevel ?? "Warning",
         "--show-level",
         "--show-log-origin",
         "--metrics-path",
@@ -291,56 +294,39 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
       );
     }
 
-    // Configure devices similarly to the boot path; snapshot load expects a compatible config.
-    await this.request(apiSockHost, "PUT", "/machine-config", {
-      vcpu_count: vm.cpu,
-      mem_size_mib: vm.memMb,
-      smt: false
+    // Snapshot artifacts live under STORAGE_ROOT/snapshots, which is outside the jail chroot.
+    // Copy them into the jail root and load via in-chroot paths.
+    const snapDir = path.join(jailRoot, "snapshot-in");
+    await fs.mkdir(snapDir, { recursive: true });
+    const stateHost = path.join(snapDir, "vmstate.snap");
+    const memHost = path.join(snapDir, "mem.snap");
+    await linkOrCopy(snapshot.statePath, stateHost);
+    await linkOrCopy(snapshot.memPath, memHost);
+
+    await this.request(apiSockHost, "PUT", "/snapshot/load", {
+      snapshot_path: inChrootPathForHostPath(jailRoot, stateHost),
+      mem_file_path: inChrootPathForHostPath(jailRoot, memHost),
+      resume_vm: false
     });
 
-    const kernelInChroot = inChrootPathForHostPath(jailRoot, kernelPath);
     const rootfsInChroot = inChrootPathForHostPath(jailRoot, rootfsPath);
-
-    // Determine if we're using overlay mode
     const useOverlay = !!overlayPath;
-
-    await this.request(apiSockHost, "PUT", "/boot-source", {
-      kernel_image_path: kernelInChroot,
-      boot_args:
-        [
-          "console=ttyS0,115200",
-          "earlycon=uart8250,io,0x3f8,115200n8",
-          "reboot=k",
-          "panic=1",
-          "pci=off",
-          "root=/dev/vda",
-          "rootfstype=ext4",
-          useOverlay ? "ro" : "rw",
-          "rootwait",
-          "init=/sbin/init",
-          `ip=${vm.guestIp}::172.16.0.1:255.255.255.0::eth0:off`
-        ].join(" ")
-    });
-
-    await this.request(apiSockHost, "PUT", "/drives/rootfs", {
+    await this.request(apiSockHost, "PATCH", "/drives/rootfs", {
       drive_id: "rootfs",
       path_on_host: rootfsInChroot,
-      is_root_device: true,
       is_read_only: useOverlay
     });
 
-    // If overlay is enabled, add the overlay disk as a second drive
     if (overlayPath) {
       const overlayInChroot = inChrootPathForHostPath(jailRoot, overlayPath);
-      await this.request(apiSockHost, "PUT", "/drives/overlay", {
+      await this.request(apiSockHost, "PATCH", "/drives/overlay", {
         drive_id: "overlay",
         path_on_host: overlayInChroot,
-        is_root_device: false,
         is_read_only: false
       });
     }
 
-    await this.request(apiSockHost, "PUT", "/network-interfaces/eth0", {
+    await this.request(apiSockHost, "PATCH", "/network-interfaces/eth0", {
       iface_id: "eth0",
       host_dev_name: tapName,
       guest_mac: generateMac(vm.id)
@@ -351,20 +337,6 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
     await this.request(apiSockHost, "PUT", "/vsock", {
       guest_cid: vm.vsockCid,
       uds_path: vsockUdsInChroot
-    });
-
-    // Snapshot artifacts live under STORAGE_ROOT/snapshots, which is outside the jail chroot.
-    // Copy them into the jail root and load via in-chroot paths.
-    const snapDir = path.join(jailRoot, "snapshot-in");
-    await fs.mkdir(snapDir, { recursive: true });
-    const stateHost = path.join(snapDir, "vmstate.snap");
-    const memHost = path.join(snapDir, "mem.snap");
-    await fs.copyFile(snapshot.statePath, stateHost);
-    await fs.copyFile(snapshot.memPath, memHost);
-
-    await this.request(apiSockHost, "PUT", "/snapshot/load", {
-      snapshot_path: inChrootPathForHostPath(jailRoot, stateHost),
-      mem_file_path: inChrootPathForHostPath(jailRoot, memHost)
     });
 
     await this.request(apiSockHost, "PATCH", "/vm", { state: "Resumed" });
@@ -421,7 +393,20 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
   async destroy(vm: VmRecord): Promise<void> {
     const proc = this.processes.get(vm.id);
     if (proc) {
-      proc.kill("SIGTERM");
+      const killSafe = (sig: NodeJS.Signals) => {
+        try {
+          proc.kill(sig);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+      killSafe("SIGTERM");
+      const exited = await waitForExit(proc, 3_000).catch(() => false);
+      if (!exited) {
+        killSafe("SIGKILL");
+        await waitForExit(proc, 2_000).catch(() => undefined);
+      }
       this.processes.delete(vm.id);
     }
     // Remove the entire jail subtree (sockets, logs, staged snapshots, etc.).
@@ -459,6 +444,15 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
       }
       req.end();
     });
+  }
+}
+
+async function linkOrCopy(src: string, dest: string): Promise<void> {
+  await fs.rm(dest, { force: true }).catch(() => undefined);
+  try {
+    await fs.link(src, dest);
+  } catch {
+    await fs.copyFile(src, dest);
   }
 }
 

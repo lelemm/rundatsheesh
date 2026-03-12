@@ -1,5 +1,6 @@
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -105,12 +106,39 @@ static bool wait_for_device(const char *path, int timeout_ms) {
   return false;
 }
 
+static int cmdline_int(const char *key, int fallback) {
+  FILE *f = fopen("/proc/cmdline", "r");
+  if (!f) return fallback;
+  char buf[4096];
+  size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+  fclose(f);
+  if (n == 0) return fallback;
+  buf[n] = '\0';
+
+  char pattern[128];
+  snprintf(pattern, sizeof(pattern), "%s=", key);
+  char *p = strstr(buf, pattern);
+  if (!p) return fallback;
+  p += strlen(pattern);
+  char *end = p;
+  while (*end && *end != ' ') end++;
+  char tmp[32];
+  size_t len = (size_t)(end - p);
+  if (len == 0 || len >= sizeof(tmp)) return fallback;
+  memcpy(tmp, p, len);
+  tmp[len] = '\0';
+  char *parse_end = NULL;
+  long v = strtol(tmp, &parse_end, 10);
+  if (parse_end == tmp || *parse_end != '\0' || v < 0 || v > INT_MAX) return fallback;
+  return (int)v;
+}
+
 // Check if overlay device exists and we should use overlayfs mode.
 // Polls for up to 500ms to handle kernel device initialization race.
-static bool should_use_overlay(void) {
+static bool should_use_overlay(int wait_ms) {
   // The overlay device might not be immediately available after devtmpfs mount
   // due to kernel virtio-blk initialization timing. Poll with a short timeout.
-  return wait_for_device(OVERLAY_DEV, 500);
+  return wait_for_device(OVERLAY_DEV, wait_ms);
 }
 
 // Set up overlayfs with the current root as lower and /dev/vdb as upper
@@ -202,9 +230,6 @@ static void start_services(void) {
   pid_t node_pid = spawn("/usr/local/bin/node", node_argv);
   if (node_pid > 0) log_line("[init] guest-agent pid=%d", (int)node_pid);
 
-  // Give the HTTP server a moment to bind before we accept vsock connections.
-  usleep(200 * 1000);
-
   log_line("[init] starting socat vsock->tcp");
   char *socat_argv[] = { (char *)"socat", (char *)"VSOCK-LISTEN:8080,fork", (char *)"TCP:127.0.0.1:8080", NULL };
   pid_t socat_pid = spawn("/usr/bin/socat", socat_argv);
@@ -237,8 +262,11 @@ int main(void) {
   if (mount("sysfs", "/sys", "sysfs", 0, NULL) != 0) log_line("mount /sys failed: %s", strerror(errno));
   if (mount("devtmpfs", "/dev", "devtmpfs", 0, NULL) != 0) log_line("mount /dev failed: %s", strerror(errno));
 
+  int overlay_wait_ms = cmdline_int("rds_overlay_wait_ms", 200);
+  log_line("[init] overlay wait timeout: %dms", overlay_wait_ms);
+
   // Check if we should use overlayfs mode (overlay device present)
-  if (should_use_overlay()) {
+  if (should_use_overlay(overlay_wait_ms)) {
     if (setup_overlay()) {
       // After pivot_root, we need to remount /proc, /sys, /dev in the new root
       // They were left behind in the old root

@@ -7,7 +7,6 @@ MANAGER_PORT=${MANAGER_PORT:-3000}
 MANAGER_BASE=${MANAGER_BASE:-http://127.0.0.1:${MANAGER_PORT}}
 ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
 ADMIN_PASSWORD=${ADMIN_PASSWORD:-dev-password}
-ENABLE_SNAPSHOTS=${ENABLE_SNAPSHOTS:-false}
 SNAPSHOT_TEMPLATE_CPU=${SNAPSHOT_TEMPLATE_CPU:-1}
 SNAPSHOT_TEMPLATE_MEM_MB=${SNAPSHOT_TEMPLATE_MEM_MB:-256}
 # INTEGRATION_IMAGE can be set to run only a specific image variant:
@@ -100,7 +99,7 @@ compute_dev_args
 # This prefix is used by the vitest suite itself (see integration.test.ts).
 # Docker may create root-owned files, so try normal rm first, then sudo if needed.
 rm -rf /tmp/run-dat-sheesh-it-* >/dev/null 2>&1 || \
-  sudo rm -rf /tmp/run-dat-sheesh-it-* >/dev/null 2>&1 || true
+  sudo -n rm -rf /tmp/run-dat-sheesh-it-* >/dev/null 2>&1 || true
 
 echo "Building guest artifacts (kernel + rootfs)..."
 make -C "$ROOT_DIR" guest-images
@@ -150,7 +149,6 @@ CID=$(docker run -d \
   -e AGENT_VSOCK_PORT=8080 \
   -e ROOTFS_CLONE_MODE="${ROOTFS_CLONE_MODE:-auto}" \
   -e OVERLAY_SIZE_BYTES="${OVERLAY_SIZE_BYTES:-536870912}" \
-  -e ENABLE_SNAPSHOTS="$ENABLE_SNAPSHOTS" \
   -e SNAPSHOT_TEMPLATE_CPU="$SNAPSHOT_TEMPLATE_CPU" \
   -e SNAPSHOT_TEMPLATE_MEM_MB="$SNAPSHOT_TEMPLATE_MEM_MB" \
   -p "${MANAGER_PORT}:${MANAGER_PORT}" \
@@ -172,9 +170,9 @@ cleanup() {
   fi
   # Clean up the temp directories. If files are still root-owned, try sudo.
   rm -rf "${RDS_DATA_DIR:-}" >/dev/null 2>&1 || \
-    sudo rm -rf "${RDS_DATA_DIR:-}" >/dev/null 2>&1 || true
+    sudo -n rm -rf "${RDS_DATA_DIR:-}" >/dev/null 2>&1 || true
   rm -rf "${RDS_IMAGES_DIR:-}" >/dev/null 2>&1 || \
-    sudo rm -rf "${RDS_IMAGES_DIR:-}" >/dev/null 2>&1 || true
+    sudo -n rm -rf "${RDS_IMAGES_DIR:-}" >/dev/null 2>&1 || true
 }
 on_signal() {
   FAILED=1
@@ -260,23 +258,13 @@ if should_include_image "alpine-bash"; then
   set_default_once "$ALPINE_BASH_ID"
 fi
 
-if [ "$ENABLE_SNAPSHOTS" = "true" ]; then
-  echo "Building template snapshot inside manager container..."
-  docker exec "$CID" sh -lc 'node dist/index.js snapshot-build' || { echo "Snapshot build failed"; FAILED=1; exit 1; }
-fi
-
 echo "Starting test HTTP server inside manager container..."
 # Listen on 0.0.0.0 so it stays valid even before the tap interface (172.16.0.1) is created.
 docker exec "$CID" sh -lc 'node -e "require(\"http\").createServer((req,res)=>res.end(\"ok\")).listen(18080,\"0.0.0.0\")" >/tmp/test-server.log 2>&1 & echo $! > /tmp/test-server.pid'
 
 export API_KEY
 export MANAGER_BASE
-export ENABLE_SNAPSHOTS
-if [ "$ENABLE_SNAPSHOTS" = "true" ] && [ -n "${SNAPSHOT_MAX_CREATE_MS:-}" ] && [ -z "${MAX_CREATE_MS:-}" ]; then
-  export MAX_CREATE_MS="$SNAPSHOT_MAX_CREATE_MS"
-else
-  export MAX_CREATE_MS=${MAX_CREATE_MS:-}
-fi
+export MAX_CREATE_MS=${MAX_CREATE_MS:-}
 
 echo "Running vitest integration suite..."
 

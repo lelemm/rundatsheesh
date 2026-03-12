@@ -68,7 +68,7 @@ interface VM {
   memMb: number
   allowInternet: boolean
   createdAt: string
-  snapshotId?: string
+  userOverlaySnapshotId?: string
 }
 
 interface ApiVm {
@@ -94,7 +94,14 @@ export function VMsPanel() {
   const [createError, setCreateError] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
   const [selectedVM, setSelectedVM] = useState<VM | null>(null)
-  const [newVM, setNewVM] = useState({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "", imageId: "", diskSizeMb: 512 })
+  const [newVM, setNewVM] = useState({
+    cpu: 2,
+    memMb: 2048,
+    allowInternet: false,
+    userOverlaySnapshotId: "",
+    imageId: "",
+    diskSizeMb: 512
+  })
   const [vmToDelete, setVmToDelete] = useState<VM | null>(null)
   const [images, setImages] = useState<Array<{ id: string; name: string; isDefault?: boolean }>>([])
   const [pendingByVmId, setPendingByVmId] = useState<Record<string, "start" | "stop">>({})
@@ -195,7 +202,7 @@ export function VMsPanel() {
       outboundInternet: newVM.allowInternet,
       diskSizeMb: newVM.diskSizeMb,
     }
-    if (newVM.snapshotId) payload.snapshotId = newVM.snapshotId
+    if (newVM.userOverlaySnapshotId) payload.userOverlaySnapshotId = newVM.userOverlaySnapshotId
     if (newVM.imageId) payload.imageId = newVM.imageId
     setCreateError(null)
     setIsCreating(true)
@@ -203,7 +210,7 @@ export function VMsPanel() {
       await apiRequestJson("POST", "/v1/vms", payload)
       toast({ title: "VM creation started" })
       setCreateDialogOpen(false)
-      setNewVM({ cpu: 2, memMb: 2048, allowInternet: false, snapshotId: "", imageId: "", diskSizeMb: 512 })
+      setNewVM({ cpu: 2, memMb: 2048, allowInternet: false, userOverlaySnapshotId: "", imageId: "", diskSizeMb: 512 })
       await refresh()
     } catch (e: any) {
       const msg = String(e?.message ?? e)
@@ -423,13 +430,13 @@ export function VMsPanel() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="snapshot" className="text-foreground">
-                    Snapshot ID (optional)
+                    User Overlay Snapshot ID (optional)
                   </Label>
                   <Input
                     id="snapshot"
                     placeholder="snap-xxxxx"
-                    value={newVM.snapshotId}
-                    onChange={(e) => setNewVM({ ...newVM, snapshotId: e.target.value })}
+                    value={newVM.userOverlaySnapshotId}
+                    onChange={(e) => setNewVM({ ...newVM, userOverlaySnapshotId: e.target.value })}
                     className="bg-input border-border text-foreground placeholder:text-muted-foreground"
                     disabled={isCreating}
                   />

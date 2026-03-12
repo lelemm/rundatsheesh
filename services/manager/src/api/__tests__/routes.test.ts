@@ -7,6 +7,8 @@ import type { VmPublic } from "../../types/vm.js";
 class FakeVmService {
   public created: VmPublic | null = null;
   public listResult: VmPublic[] = [];
+  public listSnapshotsCalls: Array<"user" | "internal" | "all" | undefined> = [];
+  public lastCreatePayload: any = null;
   public startIds: string[] = [];
   public stopIds: string[] = [];
   public destroyIds: string[] = [];
@@ -21,7 +23,8 @@ class FakeVmService {
     return this.listResult.find((vm) => vm.id === id) ?? null;
   }
 
-  async create(_request: { cpu: number; memMb: number; allowIps: string[] }) {
+  async create(request: { cpu: number; memMb: number; allowIps: string[]; userOverlaySnapshotId?: string; snapshotId?: string }) {
+    this.lastCreatePayload = request;
     const vm: VmPublic = {
       id: "vm-1",
       state: "RUNNING",
@@ -33,6 +36,15 @@ class FakeVmService {
     };
     this.created = vm;
     return vm;
+  }
+
+  async listSnapshots(scope?: "user" | "internal" | "all") {
+    this.listSnapshotsCalls.push(scope);
+    return [];
+  }
+
+  async ensureImageSeedSnapshot(_imageId: string) {
+    return null;
   }
 
   async start(id: string) {
@@ -125,6 +137,39 @@ describe("manager API", () => {
 
     expect(res.statusCode).toBe(201);
     expect(service.created?.id).toBe("vm-1");
+  });
+
+  it("forwards userOverlaySnapshotId on VM create", async () => {
+    const service = new FakeVmService();
+    const app = buildTestApp(service);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/vms",
+      headers: { "x-api-key": apiKey },
+      payload: { cpu: 1, memMb: 256, allowIps: ["1.2.3.4/32"], userOverlaySnapshotId: "snap-123" }
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(service.lastCreatePayload?.userOverlaySnapshotId).toBe("snap-123");
+  });
+
+  it("uses user scope by default for snapshots listing", async () => {
+    const service = new FakeVmService();
+    const app = buildTestApp(service);
+
+    const res = await app.inject({ method: "GET", url: "/v1/snapshots", headers: { "x-api-key": apiKey } });
+    expect(res.statusCode).toBe(200);
+    expect(service.listSnapshotsCalls[0]).toBe("user");
+  });
+
+  it("supports internal scope for snapshots listing", async () => {
+    const service = new FakeVmService();
+    const app = buildTestApp(service);
+
+    const res = await app.inject({ method: "GET", url: "/v1/snapshots?scope=internal", headers: { "x-api-key": apiKey } });
+    expect(res.statusCode).toBe(200);
+    expect(service.listSnapshotsCalls[0]).toBe("internal");
   });
 
   it("starts/stops/destroys a VM", async () => {

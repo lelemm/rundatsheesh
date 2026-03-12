@@ -70,7 +70,9 @@ function toRow(vm: VmRecord) {
     kernelPath: vm.kernelPath,
     logsDir: vm.logsDir,
     createdAt: vm.createdAt,
-    provisionMode: vm.provisionMode ?? null
+    provisionMode: vm.provisionMode ?? null,
+    baseSeedSnapshotId: vm.baseSeedSnapshotId ?? null,
+    poolTag: vm.poolTag ?? null
   };
 }
 
@@ -91,6 +93,8 @@ function fromRow(row: any): VmRecord {
     kernelPath: String(row.kernelPath),
     logsDir: String(row.logsDir),
     createdAt: String(row.createdAt),
-    provisionMode: row.provisionMode ?? undefined
+    provisionMode: row.provisionMode ?? undefined,
+    baseSeedSnapshotId: row.baseSeedSnapshotId ?? undefined,
+    poolTag: row.poolTag ?? undefined
   };
 }

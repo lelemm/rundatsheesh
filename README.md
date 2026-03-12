@@ -107,9 +107,14 @@ These are read by the manager container at startup:
   - `auto`: choose best available
   - `reflink`: copy-on-write clone (requires filesystem support)
   - `copy`: full copy
-- **`ENABLE_SNAPSHOTS` (default `false`)**: enable snapshot endpoints and snapshot restore support.
-- **`SNAPSHOT_TEMPLATE_CPU` (default `1`)**: vCPU count for the “template snapshot” builder.
-- **`SNAPSHOT_TEMPLATE_MEM_MB` (default `256`)**: memory size for the “template snapshot” builder.
+- **`OVERLAY_SIZE_BYTES` (default `536870912`)**: per-VM writable overlay disk size (bytes).
+- **`FIRECRACKER_LOG_LEVEL` (default `Warning`)**: Firecracker log level (`Error|Warning|Info|Debug`).
+- **`OVERLAY_DEVICE_WAIT_MS` (default `200`)**: guest init wait for overlay block device before fallback.
+- **`SNAPSHOT_TEMPLATE_CPU` (default `1`)**: vCPU count for legacy template snapshot builder sizing.
+- **`SNAPSHOT_TEMPLATE_MEM_MB` (default `256`)**: memory size for legacy template snapshot builder sizing.
+- **`ENABLE_WARM_POOL` (default `false`)**: prewarm VMs for faster checkout (optional; disabled by default).
+- **`WARM_POOL_TARGET` (default `1`)**: target number of warm VMs when warm pool is enabled.
+- **`WARM_POOL_MAX_VMS` (default `4`)**: hard cap for warm VMs.
 
 ### Docker Compose convenience variables
 
@@ -223,4 +228,3 @@ Full validation:
 ```bash
 make verify
 ```
-

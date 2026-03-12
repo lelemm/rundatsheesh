@@ -45,7 +45,9 @@ async function main() {
     jailerBin: env.jailer.bin,
     jailerChrootBaseDir: env.jailer.chrootBaseDir,
     jailerUid: env.jailer.uid,
-    jailerGid: env.jailer.gid
+    jailerGid: env.jailer.gid,
+    logLevel: env.firecrackerLogLevel,
+    overlayDeviceWaitMs: env.overlayDeviceWaitMs
   });
   const network = new SimpleNetworkManager({ subnetCidr: "172.16.0.0/24", gatewayIp: "172.16.0.1" });
   const agentClient = new VsockAgentClient({
@@ -69,7 +71,7 @@ async function main() {
   });
 
   const snapshotVersion =
-    env.enableSnapshots && env.kernelPath && env.baseRootfsPath
+    env.kernelPath && env.baseRootfsPath
       ? await computeSnapshotVersion({ kernelPath: env.kernelPath, baseRootfsPath: env.baseRootfsPath })
       : "";
 
@@ -83,9 +85,8 @@ async function main() {
     limits: env.limits,
     activity: activityService,
     dnsServerIp: env.dnsServerIp,
-    snapshots: env.enableSnapshots
-      ? { enabled: true, version: snapshotVersion, templateCpu: env.snapshotTemplateCpu, templateMemMb: env.snapshotTemplateMemMb }
-      : undefined
+    warmPool: env.warmPool,
+    snapshots: { enabled: true, version: snapshotVersion, templateCpu: env.snapshotTemplateCpu, templateMemMb: env.snapshotTemplateMemMb }
   });
 
   const deps = {

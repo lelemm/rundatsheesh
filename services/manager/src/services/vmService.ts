@@ -30,6 +30,11 @@ export interface VmServiceOptions {
     maxExecTimeoutMs: number;
     maxRunTsTimeoutMs: number;
   };
+  warmPool?: {
+    enabled: boolean;
+    target: number;
+    maxVms: number;
+  };
 }
 
 export class VmService {
@@ -43,8 +48,12 @@ export class VmService {
   private readonly snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   private readonly limits: NonNullable<VmServiceOptions["limits"]>;
   private readonly dnsServerIp?: string;
+  private readonly warmPool?: { enabled: boolean; target: number; maxVms: number };
   private nextVsockCid: number;
   private readonly execLogs: ExecLogService;
+  private readonly seedBuilds = new Map<string, Promise<string | null>>();
+  private readonly warmPoolVmIds = new Set<string>();
+  private warmTopupRunning = false;
 
   constructor(options: VmServiceOptions) {
     this.store = options.store;
@@ -56,6 +65,7 @@ export class VmService {
     this.activity = options.activity;
     this.snapshots = options.snapshots;
     this.dnsServerIp = options.dnsServerIp;
+    this.warmPool = options.warmPool;
     this.execLogs = new ExecLogService();
     this.limits = options.limits ?? {
       maxVms: 20,
@@ -66,26 +76,45 @@ export class VmService {
       maxRunTsTimeoutMs: 120_000
     };
     this.nextVsockCid = options.vsockCidStart ?? 5000;
+    if (this.warmPool?.enabled) {
+      this.scheduleWarmPoolTopup();
+    }
   }
 
   async list(): Promise<VmPublic[]> {
     const items = await this.store.list();
     // Deleted VMs are tombstoned (for auditing/logging) but should not appear in normal listings.
-    return items.filter((vm) => vm.state !== "DELETED").map((vm) => toPublic(vm));
+    return items.filter((vm) => vm.state !== "DELETED" && vm.poolTag !== "warm").map((vm) => toPublic(vm));
   }
 
   async get(id: string): Promise<VmPublic | null> {
     const vm = await this.store.get(id);
     if (!vm) return null;
     if (vm.state === "DELETED") return null;
+    if (vm.poolTag === "warm") return null;
     return toPublic(vm);
   }
 
-  async create(request: VmCreateRequest): Promise<VmPublic> {
+  async create(request: VmCreateRequest, internal?: { skipWarmCheckout?: boolean; poolTag?: "warm" }): Promise<VmPublic> {
     validateCreateRequest(request, this.limits);
-    const active = (await this.store.list()).filter((vm) => vm.state !== "DELETED");
+    const active = (await this.store.list()).filter((vm) => vm.state !== "DELETED" && vm.poolTag !== "warm");
     if (active.length >= this.limits.maxVms) {
       throw new HttpError(429, `VM quota exceeded (maxVms=${this.limits.maxVms})`);
+    }
+
+    const requestedOverlaySnapshotId = normalizeSnapshotId(request.userOverlaySnapshotId ?? request.snapshotId);
+    if (requestedOverlaySnapshotId && !request.userOverlaySnapshotId) {
+      const legacy = await this.storage.readSnapshotMeta(requestedOverlaySnapshotId);
+      // Backward compatibility: old "vm"/"template" snapshots via snapshotId keep legacy semantics.
+      if (legacy && (legacy.kind === "vm" || legacy.kind === "template") && legacy.hasDisk && !legacy.baseSeedSnapshotId) {
+        return this.createWithLegacySnapshotRestore(request, requestedOverlaySnapshotId);
+      }
+    }
+
+    // Optional warm pool checkout path (only for plain creates without user overlay snapshot).
+    if (this.warmPool?.enabled && !requestedOverlaySnapshotId && !internal?.skipWarmCheckout) {
+      const fromPool = await this.tryCheckoutWarmVm(request);
+      if (fromPool) return fromPool;
     }
 
     const mbToBytes = (mb: number) => Math.floor(mb * 1024 * 1024);
@@ -98,69 +127,57 @@ export class VmService {
     const createdAt = new Date().toISOString();
     const { guestIp, tapName } = await this.network.allocateIp();
     const tStorageStart = Date.now();
-    let rootfsPath = "";
-    let kernelPath = "";
-    let logsDir = "";
-    let overlayPath: string | null = null;
-    let imageId: string | undefined;
-    if (request.snapshotId) {
-      const snap = await this.storage.getSnapshotArtifactPaths(request.snapshotId);
-      const meta = await this.storage.readSnapshotMeta(request.snapshotId);
-      if (!meta || !meta.hasDisk) {
-        throw new HttpError(404, "Snapshot not found or missing disk baseline");
+    let snapshotStageMs = 0;
+    let baseSeedSnapshotId: string | undefined;
+
+    const resolved = await this.images.resolveForVmCreate(request.imageId);
+    const imageId = resolved.imageId;
+    const minMb = minDiskMb(resolved.baseRootfsBytes);
+    const requestedMb =
+      typeof request.diskSizeMb === "number"
+        ? Math.max(request.diskSizeMb, minMb)
+        : Math.max(DEFAULT_DISK_MB, minMb + DEFAULT_DISK_HEADROOM_MB);
+    if (requestedMb < minMb) {
+      throw new HttpError(400, `diskSizeMb too small (min=${minMb})`);
+    }
+
+    const prepared = await this.storage.prepareVmStorage(id, {
+      kernelSrcPath: resolved.kernelSrcPath,
+      baseRootfsPath: resolved.baseRootfsPath,
+      diskSizeBytes: mbToBytes(requestedMb)
+    });
+    const rootfsPath = prepared.rootfsPath;
+    const logsDir = prepared.logsDir;
+    const kernelPath = prepared.kernelPath;
+    const overlayPath = prepared.overlayPath;
+
+    const imageRow = imageId ? await this.images.getById(imageId) : null;
+    if (imageRow?.seedStatus === "ready" && imageRow.seedSnapshotId) {
+      baseSeedSnapshotId = imageRow.seedSnapshotId;
+    } else if (imageId) {
+      void this.ensureImageSeedSnapshot(imageId);
+    }
+
+    if (requestedOverlaySnapshotId) {
+      if (!overlayPath) {
+        throw new HttpError(500, "OverlayFS storage is required for user overlay snapshots");
       }
-      if (meta.cpu !== request.cpu || meta.memMb !== request.memMb) {
-        throw new HttpError(
-          400,
-          `Snapshot cpu/mem mismatch: snapshot=${meta.cpu}/${meta.memMb} requested=${request.cpu}/${request.memMb}`
-        );
+      const tSnapshotStageStart = Date.now();
+      const meta = await this.storage.readSnapshotMeta(requestedOverlaySnapshotId);
+      if (!meta) {
+        throw new HttpError(404, "User overlay snapshot not found");
       }
-      const hasAll = await Promise.all([fs.stat(snap.memPath), fs.stat(snap.statePath), fs.stat(snap.diskPath)])
-        .then(() => true)
-        .catch(() => false);
-      if (!hasAll) {
-        throw new HttpError(409, "Snapshot artifacts missing on disk");
+      if (meta.kind === "image_seed" || meta.kind === "template") {
+        throw new HttpError(400, "Snapshot kind cannot be used as a user overlay baseline");
       }
-      const diskBytes = (await fs.stat(snap.diskPath)).size;
-      const resolved = await this.images.resolveForVmCreate(meta.imageId ?? request.imageId);
-      imageId = resolved.imageId;
-      const minMb = minDiskMb(diskBytes);
-      const requestedMb =
-        typeof request.diskSizeMb === "number"
-          ? Math.max(request.diskSizeMb, minMb)
-          : Math.max(DEFAULT_DISK_MB, minMb + DEFAULT_DISK_HEADROOM_MB);
-      if (requestedMb < minDiskMb(diskBytes)) {
-        throw new HttpError(400, `diskSizeMb too small (min=${minDiskMb(diskBytes)})`);
+      if (meta.imageId && imageId && meta.imageId !== imageId) {
+        throw new HttpError(400, `Snapshot image mismatch: snapshot=${meta.imageId} vm=${imageId}`);
       }
-      const prepared = await this.storage.prepareVmStorageFromDisk(id, {
-        kernelSrcPath: resolved.kernelSrcPath,
-        diskSrcPath: snap.diskPath,
-        diskSizeBytes: mbToBytes(requestedMb)
-      });
-      rootfsPath = prepared.rootfsPath;
-      logsDir = prepared.logsDir;
-      kernelPath = prepared.kernelPath;
-      overlayPath = prepared.overlayPath;
-    } else {
-      const resolved = await this.images.resolveForVmCreate(request.imageId);
-      imageId = resolved.imageId;
-      const minMb = minDiskMb(resolved.baseRootfsBytes);
-      const requestedMb =
-        typeof request.diskSizeMb === "number"
-          ? Math.max(request.diskSizeMb, minMb)
-          : Math.max(DEFAULT_DISK_MB, minMb + DEFAULT_DISK_HEADROOM_MB);
-      if (requestedMb < minMb) {
-        throw new HttpError(400, `diskSizeMb too small (min=${minMb})`);
-      }
-      const prepared = await this.storage.prepareVmStorage(id, {
-        kernelSrcPath: resolved.kernelSrcPath,
-        baseRootfsPath: resolved.baseRootfsPath,
-        diskSizeBytes: mbToBytes(requestedMb)
-      });
-      rootfsPath = prepared.rootfsPath;
-      logsDir = prepared.logsDir;
-      kernelPath = prepared.kernelPath;
-      overlayPath = prepared.overlayPath;
+
+      const src = await this.resolveOverlayBaselinePath(requestedOverlaySnapshotId, meta);
+      await this.storage.cloneDisk(src, overlayPath);
+      baseSeedSnapshotId = meta.baseSeedSnapshotId ?? baseSeedSnapshotId;
+      snapshotStageMs = Date.now() - tSnapshotStageStart;
     }
     const storageMs = Date.now() - tStorageStart;
 
@@ -179,7 +196,9 @@ export class VmService {
       overlayPath,
       kernelPath,
       logsDir,
-      createdAt
+      createdAt,
+      baseSeedSnapshotId,
+      poolTag: internal?.poolTag
     };
 
     await this.store.create(vm);
@@ -192,105 +211,58 @@ export class VmService {
     });
 
     try {
-      // Explicit snapshotId takes precedence over template snapshots.
-      if (request.snapshotId) {
-        const snapshotPaths = await this.storage.getSnapshotArtifactPaths(request.snapshotId);
-        let mode: VmProvisionMode = "snapshot";
-        let firecrackerMs = 0;
-        let snapshotLoadMs = 0;
-
-        await this.network.configure(vm, tapName, { up: false });
-        const tRestoreStart = Date.now();
-        await this.firecracker.restoreFromSnapshot(vm, rootfsPath, vm.kernelPath, tapName, {
-          memPath: snapshotPaths.memPath,
-          statePath: snapshotPaths.statePath
-        }, vm.overlayPath);
-        snapshotLoadMs = Date.now() - tRestoreStart;
-
-        await this.store.update(vm.id, { state: "STARTING" });
-        const tAgentHealthStart = Date.now();
-        await this.agentClient.health(vm.id);
-        const agentHealthMs = Date.now() - tAgentHealthStart;
-
-        await this.agentClient.configureNetwork(vm.id, {
-          iface: "eth0",
-          ip: vm.guestIp,
-          cidr: 24,
-          gateway: "172.16.0.1",
-          mac: generateMac(vm.id),
-          ...(this.dnsServerIp ? { dns: this.dnsServerIp } : {})
-        });
-        await this.network.bringUpTap(tapName);
-
-        await this.agentClient.applyAllowlist(vm.id, request.allowIps, vm.outboundInternet);
-        await this.store.update(vm.id, { state: "RUNNING", provisionMode: mode });
-        await this.activity?.logEvent({
-          type: "vm.started",
-          entityType: "vm",
-          entityId: vm.id,
-          message: "VM started (restored from snapshot)",
-          meta: { mode, snapshotId: request.snapshotId }
-        });
-        const totalMs = Date.now() - tTotalStart;
-        // eslint-disable-next-line no-console
-        console.info("[vm-provision]", {
-          vmId: vm.id,
-          mode,
-          storageMs,
-          firecrackerMs,
-          snapshotLoadMs,
-          agentHealthMs,
-          totalMs
-        });
-
-        const latest = await this.store.get(vm.id);
-        return toPublic(latest ?? vm);
-      }
-
-      const canUseSnapshot =
-        Boolean(this.snapshots?.enabled) && request.cpu === this.snapshots!.templateCpu && request.memMb === this.snapshots!.templateMemMb;
-
       let mode: VmProvisionMode = "boot";
       let firecrackerMs = 0;
       let snapshotLoadMs = 0;
+      let networkMs = 0;
 
-      if (canUseSnapshot) {
-        const snapshotPaths = await this.storage.getSnapshotArtifactPaths(this.snapshots!.version);
+      let snapshotIdForBoot: string | undefined;
+      const canUseLegacyTemplateSnapshot =
+        Boolean(this.snapshots?.enabled) && request.cpu === this.snapshots!.templateCpu && request.memMb === this.snapshots!.templateMemMb;
+      if (canUseLegacyTemplateSnapshot) {
+        snapshotIdForBoot = this.snapshots!.version;
+      }
+
+      if (snapshotIdForBoot) {
+        const snapshotPaths = await this.storage.getSnapshotArtifactPaths(snapshotIdForBoot);
         const snapshotExists = await Promise.all([fs.stat(snapshotPaths.memPath), fs.stat(snapshotPaths.statePath)])
           .then(() => true)
           .catch(() => false);
-
         if (snapshotExists) {
           mode = "snapshot";
-          // Keep tap DOWN until guest networking is reconfigured (avoid L2 conflicts).
+          const tNetworkStart = Date.now();
           await this.network.configure(vm, tapName, { up: false });
+          networkMs += Date.now() - tNetworkStart;
           try {
             const tRestoreStart = Date.now();
-            await this.firecracker.restoreFromSnapshot(vm, rootfsPath, vm.kernelPath, tapName, {
-              memPath: snapshotPaths.memPath,
-              statePath: snapshotPaths.statePath
-            }, vm.overlayPath);
+            await this.firecracker.restoreFromSnapshot(
+              vm,
+              rootfsPath,
+              vm.kernelPath,
+              tapName,
+              {
+                memPath: snapshotPaths.memPath,
+                statePath: snapshotPaths.statePath
+              },
+              vm.overlayPath
+            );
             snapshotLoadMs = Date.now() - tRestoreStart;
           } catch (err) {
-            // Best-effort fallback: if snapshot restore fails (version mismatch, API incompatibility),
-            // tear down the partial VM and do a normal boot path.
             // eslint-disable-next-line no-console
             console.warn("[vm-provision] snapshot restore failed; falling back to cold boot", { vmId: vm.id, err: String(err) });
             mode = "boot";
             await this.firecracker.destroy(vm).catch(() => undefined);
+            const tBringTapStart = Date.now();
             await this.network.bringUpTap(tapName).catch(() => undefined);
-            const tFirecrackerStart = Date.now();
-            await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName, vm.overlayPath);
-            firecrackerMs = Date.now() - tFirecrackerStart;
+            networkMs += Date.now() - tBringTapStart;
           }
-        } else {
-          await this.network.configure(vm, tapName);
-          const tFirecrackerStart = Date.now();
-          await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName, vm.overlayPath);
-          firecrackerMs = Date.now() - tFirecrackerStart;
         }
-      } else {
+      }
+
+      if (mode === "boot") {
+        const tNetworkStart = Date.now();
         await this.network.configure(vm, tapName);
+        networkMs += Date.now() - tNetworkStart;
         const tFirecrackerStart = Date.now();
         await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName, vm.overlayPath);
         firecrackerMs = Date.now() - tFirecrackerStart;
@@ -313,7 +285,9 @@ export class VmService {
           mac: generateMac(vm.id),
           ...(this.dnsServerIp ? { dns: this.dnsServerIp } : {})
         });
+        const tBringTapStart = Date.now();
         await this.network.bringUpTap(tapName);
+        networkMs += Date.now() - tBringTapStart;
       } else if (this.dnsServerIp) {
         // For cold boot VMs, networking is configured via kernel cmdline, but DNS may not be.
         // If a custom DNS server is configured at the manager level, push it to the guest.
@@ -346,6 +320,149 @@ export class VmService {
         vmId: vm.id,
         mode,
         storageMs,
+        networkMs,
+        snapshotStageMs,
+        firecrackerMs,
+        snapshotLoadMs,
+        agentHealthMs,
+        totalMs
+      });
+      if (!internal?.poolTag) {
+        this.scheduleWarmPoolTopup();
+      }
+    } catch (error) {
+      await this.store.update(vm.id, { state: "ERROR" });
+      throw error;
+    }
+
+    const latest = await this.store.get(vm.id);
+    if (internal?.poolTag === "warm") {
+      this.warmPoolVmIds.add(vm.id);
+    }
+    return toPublic(latest ?? vm);
+  }
+
+  private async createWithLegacySnapshotRestore(request: VmCreateRequest, snapshotId: string): Promise<VmPublic> {
+    const mbToBytes = (mb: number) => Math.floor(mb * 1024 * 1024);
+    const minDiskMb = (bytes: number) => Math.ceil(bytes / (1024 * 1024));
+    const DEFAULT_DISK_MB = 512;
+    const DEFAULT_DISK_HEADROOM_MB = 256;
+
+    const tTotalStart = Date.now();
+    const id = randomUUID();
+    const createdAt = new Date().toISOString();
+    const { guestIp, tapName } = await this.network.allocateIp();
+
+    const tStorageStart = Date.now();
+    const snap = await this.storage.getSnapshotArtifactPaths(snapshotId);
+    const meta = await this.storage.readSnapshotMeta(snapshotId);
+    if (!meta || !meta.hasDisk) {
+      throw new HttpError(404, "Snapshot not found or missing disk baseline");
+    }
+    if (meta.cpu !== request.cpu || meta.memMb !== request.memMb) {
+      throw new HttpError(400, `Snapshot cpu/mem mismatch: snapshot=${meta.cpu}/${meta.memMb} requested=${request.cpu}/${request.memMb}`);
+    }
+    const hasAll = await Promise.all([fs.stat(snap.memPath), fs.stat(snap.statePath), fs.stat(snap.diskPath)])
+      .then(() => true)
+      .catch(() => false);
+    if (!hasAll) {
+      throw new HttpError(409, "Snapshot artifacts missing on disk");
+    }
+    const diskBytes = (await fs.stat(snap.diskPath)).size;
+    const resolved = await this.images.resolveForVmCreate(meta.imageId ?? request.imageId);
+    const imageId = resolved.imageId;
+    const minMb = minDiskMb(diskBytes);
+    const requestedMb =
+      typeof request.diskSizeMb === "number"
+        ? Math.max(request.diskSizeMb, minMb)
+        : Math.max(DEFAULT_DISK_MB, minMb + DEFAULT_DISK_HEADROOM_MB);
+    if (requestedMb < minDiskMb(diskBytes)) {
+      throw new HttpError(400, `diskSizeMb too small (min=${minDiskMb(diskBytes)})`);
+    }
+    const prepared = await this.storage.prepareVmStorageFromDisk(id, {
+      kernelSrcPath: resolved.kernelSrcPath,
+      diskSrcPath: snap.diskPath,
+      diskSizeBytes: mbToBytes(requestedMb)
+    });
+    const storageMs = Date.now() - tStorageStart;
+
+    const vm: VmRecord = {
+      id,
+      state: "CREATED",
+      cpu: request.cpu,
+      memMb: request.memMb,
+      guestIp,
+      tapName,
+      vsockCid: this.allocateVsockCid(),
+      outboundInternet: request.outboundInternet ?? false,
+      allowIps: request.allowIps,
+      imageId,
+      rootfsPath: prepared.rootfsPath,
+      overlayPath: prepared.overlayPath,
+      kernelPath: prepared.kernelPath,
+      logsDir: prepared.logsDir,
+      createdAt
+    };
+
+    await this.store.create(vm);
+    await this.activity?.logEvent({
+      type: "vm.created",
+      entityType: "vm",
+      entityId: vm.id,
+      message: `VM created (${vm.cpu} vCPU, ${vm.memMb} MiB)`,
+      meta: { cpu: vm.cpu, memMb: vm.memMb, outboundInternet: vm.outboundInternet, legacySnapshot: true }
+    });
+
+    try {
+      let mode: VmProvisionMode = "snapshot";
+      let firecrackerMs = 0;
+      let snapshotLoadMs = 0;
+      let networkMs = 0;
+      const tNetworkStart = Date.now();
+      await this.network.configure(vm, tapName);
+      networkMs += Date.now() - tNetworkStart;
+
+      const tRestoreStart = Date.now();
+      await this.firecracker.restoreFromSnapshot(
+        vm,
+        vm.rootfsPath,
+        vm.kernelPath,
+        tapName,
+        {
+          memPath: snap.memPath,
+          statePath: snap.statePath
+        },
+        vm.overlayPath
+      );
+      snapshotLoadMs = Date.now() - tRestoreStart;
+
+      await this.store.update(vm.id, { state: "STARTING" });
+      const tAgentHealthStart = Date.now();
+      await this.agentClient.health(vm.id);
+      const agentHealthMs = Date.now() - tAgentHealthStart;
+
+      await this.agentClient.configureNetwork(vm.id, {
+        iface: "eth0",
+        ip: vm.guestIp,
+        cidr: 24,
+        gateway: "172.16.0.1",
+        mac: generateMac(vm.id),
+        ...(this.dnsServerIp ? { dns: this.dnsServerIp } : {})
+      });
+      const tBringTapStart = Date.now();
+      await this.network.bringUpTap(tapName);
+      networkMs += Date.now() - tBringTapStart;
+
+      await this.agentClient.applyAllowlist(vm.id, request.allowIps, vm.outboundInternet);
+      await this.store.update(vm.id, { state: "RUNNING", provisionMode: mode });
+      const totalMs = Date.now() - tTotalStart;
+      // eslint-disable-next-line no-console
+      console.info("[vm-provision]", {
+        vmId: vm.id,
+        mode,
+        storageMs,
+        networkMs,
+        snapshotStageMs: 0,
         firecrackerMs,
         snapshotLoadMs,
         agentHealthMs,
@@ -360,6 +477,18 @@ export class VmService {
     return toPublic(latest ?? vm);
   }
 
+  private async resolveOverlayBaselinePath(snapshotId: string, meta: SnapshotMeta): Promise<string> {
+    const paths = await this.storage.getSnapshotArtifactPaths(snapshotId);
+    const overlayExists = await fs.stat(paths.overlayPath).then(() => true).catch(() => false);
+    if (overlayExists) return paths.overlayPath;
+    if (meta.hasOverlay === false && meta.hasDisk) {
+      // Legacy behavior for snapshots created before overlay-only user snapshot mode.
+      const diskExists = await fs.stat(paths.diskPath).then(() => true).catch(() => false);
+      if (diskExists) return paths.diskPath;
+    }
+    throw new HttpError(409, "Snapshot is missing overlay baseline disk");
+  }
+
   async createSnapshot(id: string): Promise<SnapshotMeta> {
     const vm = await this.requireVm(id);
     if (vm.state !== "RUNNING") {
@@ -368,32 +497,34 @@ export class VmService {
 
     // Best-effort filesystem quiesce for /home/user content.
     await this.agentClient.exec(vm.id, { cmd: "sync" });
+    await new Promise((resolve) => setTimeout(resolve, 1500));
 
     const snapshotId = `snap-${randomUUID()}`;
+    if (!vm.overlayPath) {
+      throw new HttpError(409, "OverlayFS snapshot requires a writable overlay disk");
+    }
+    await syncDiskFile(vm.overlayPath);
     const paths = await this.storage.getSnapshotArtifactPaths(snapshotId);
 
-    await this.firecracker.createSnapshot(vm, { memPath: paths.memPath, statePath: paths.statePath });
-
-    // With overlay mode: save the overlay disk (contains all changes)
-    // Without overlay: save the full rootfs (legacy mode)
-    if (vm.overlayPath) {
-      await this.storage.cloneDisk(vm.overlayPath, paths.overlayPath);
-      // Also clone the base rootfs for completeness (or we could just reference the image)
-      await this.storage.cloneDisk(vm.rootfsPath, paths.diskPath);
-    } else {
-      await this.storage.cloneDisk(vm.rootfsPath, paths.diskPath);
-    }
+    // User snapshots are flattened overlay baselines only (no mem/state dependency).
+    await this.storage.cloneDisk(vm.overlayPath, paths.overlayPath);
+    await Promise.all([
+      fs.rm(paths.memPath, { force: true }).catch(() => undefined),
+      fs.rm(paths.statePath, { force: true }).catch(() => undefined),
+      fs.rm(paths.diskPath, { force: true }).catch(() => undefined)
+    ]);
 
     const meta: SnapshotMeta = {
       id: snapshotId,
-      kind: "vm",
+      kind: "user_overlay",
       createdAt: new Date().toISOString(),
       cpu: vm.cpu,
       memMb: vm.memMb,
       imageId: vm.imageId,
+      baseSeedSnapshotId: vm.baseSeedSnapshotId,
       sourceVmId: vm.id,
-      hasDisk: true,
-      hasOverlay: !!vm.overlayPath
+      hasDisk: false,
+      hasOverlay: true
     };
     await fs.writeFile(paths.metaPath, JSON.stringify(meta, null, 2), "utf-8");
     await this.activity?.logEvent({
@@ -406,7 +537,7 @@ export class VmService {
     return meta;
   }
 
-  async listSnapshots(): Promise<SnapshotMeta[]> {
+  async listSnapshots(scope: "user" | "internal" | "all" = "user"): Promise<SnapshotMeta[]> {
     const ids = await this.storage.listSnapshots();
     const items = await Promise.all(
       ids.map(async (sid) => {
@@ -414,7 +545,215 @@ export class VmService {
         return meta;
       })
     );
-    return items.filter(Boolean) as SnapshotMeta[];
+    const metas = items.filter(Boolean) as SnapshotMeta[];
+    if (scope === "all") return metas;
+    if (scope === "internal") {
+      return metas.filter((m) => m.kind === "image_seed" || m.kind === "template" || m.internal === true);
+    }
+    // user scope
+    return metas.filter((m) => m.kind === "user_overlay" || m.kind === "vm");
+  }
+
+  async ensureImageSeedSnapshot(imageId: string): Promise<string | null> {
+    const current = await this.images.getById(imageId);
+    if (!current || !current.kernelFilename || !current.rootfsFilename) {
+      return null;
+    }
+    if (current.seedStatus === "ready" && current.seedSnapshotId) {
+      const paths = await this.storage.getSnapshotArtifactPaths(current.seedSnapshotId);
+      const ok = await Promise.all([fs.stat(paths.memPath), fs.stat(paths.statePath), fs.stat(paths.overlayPath)])
+        .then(() => true)
+        .catch(() => false);
+      if (ok) return current.seedSnapshotId;
+    }
+
+    const existing = this.seedBuilds.get(imageId);
+    if (existing) return existing;
+
+    const build = this.buildImageSeedSnapshot(imageId)
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("[seed-snapshot] failed", { imageId, err: String((err as any)?.message ?? err) });
+        return null;
+      })
+      .finally(() => {
+        this.seedBuilds.delete(imageId);
+      });
+    this.seedBuilds.set(imageId, build);
+    return build;
+  }
+
+  private async buildImageSeedSnapshot(imageId: string): Promise<string | null> {
+    const image = await this.images.getById(imageId);
+    if (!image || !image.kernelFilename || !image.rootfsFilename) return null;
+
+    await this.images.markSeedPending(imageId);
+    const seedSnapshotId = `seed-${imageId}`;
+    const seedCpu = this.snapshots?.templateCpu ?? 1;
+    const seedMemMb = this.snapshots?.templateMemMb ?? 256;
+
+    // Keep temp VM id short to stay under UNIX socket path limits in jailer temp roots.
+    const tempVmId = randomUUID();
+    const createdAt = new Date().toISOString();
+    const { guestIp, tapName } = await this.network.allocateIp();
+    const resolved = await this.images.resolveForVmCreate(imageId);
+    const storage = await this.storage.prepareVmStorage(tempVmId, {
+      kernelSrcPath: resolved.kernelSrcPath,
+      baseRootfsPath: resolved.baseRootfsPath
+    });
+    if (!storage.overlayPath) {
+      await this.images.markSeedFailed(imageId, "overlay disk not available for seed snapshot");
+      return null;
+    }
+
+    const vm: VmRecord = {
+      id: tempVmId,
+      state: "CREATED",
+      cpu: seedCpu,
+      memMb: seedMemMb,
+      guestIp,
+      tapName,
+      vsockCid: this.allocateVsockCid(),
+      outboundInternet: false,
+      allowIps: [],
+      imageId,
+      rootfsPath: storage.rootfsPath,
+      overlayPath: storage.overlayPath,
+      kernelPath: storage.kernelPath,
+      logsDir: storage.logsDir,
+      createdAt
+    };
+
+    const snapshotPaths = await this.storage.getSnapshotArtifactPaths(seedSnapshotId);
+    try {
+      await this.network.configure(vm, tapName, { up: false });
+      await this.firecracker.createAndStart(vm, vm.rootfsPath, vm.kernelPath, tapName, vm.overlayPath);
+      // Seed build VMs can take longer to expose the vsock endpoint; tolerate slower health readiness.
+      await this.waitForAgentHealth(vm.id, 30_000);
+      await this.firecracker.createSnapshot(vm, { memPath: snapshotPaths.memPath, statePath: snapshotPaths.statePath });
+      await this.storage.cloneDisk(vm.overlayPath!, snapshotPaths.overlayPath);
+      await fs.rm(snapshotPaths.diskPath, { force: true }).catch(() => undefined);
+      const meta: SnapshotMeta = {
+        id: seedSnapshotId,
+        kind: "image_seed",
+        createdAt: new Date().toISOString(),
+        cpu: vm.cpu,
+        memMb: vm.memMb,
+        imageId,
+        hasDisk: false,
+        hasOverlay: true,
+        internal: true
+      };
+      await fs.writeFile(snapshotPaths.metaPath, JSON.stringify(meta, null, 2), "utf-8");
+      await this.images.markSeedReady(imageId, seedSnapshotId);
+      await this.activity?.logEvent({
+        type: "snapshot.seed_ready",
+        entityType: "image",
+        entityId: imageId,
+        message: "Image seed snapshot ready",
+        meta: { imageId, seedSnapshotId }
+      });
+      return seedSnapshotId;
+    } catch (err: any) {
+      await this.images.markSeedFailed(imageId, String(err?.message ?? err));
+      return null;
+    } finally {
+      await this.firecracker.destroy(vm).catch(() => undefined);
+      await this.network.teardown(vm, tapName).catch(() => undefined);
+      await this.storage.cleanupVmStorage(tempVmId).catch(() => undefined);
+    }
+  }
+
+  private async waitForAgentHealth(vmId: string, timeoutMs: number): Promise<void> {
+    const started = Date.now();
+    let lastErr: unknown;
+    while (Date.now() - started < timeoutMs) {
+      try {
+        await this.agentClient.health(vmId);
+        return;
+      } catch (err) {
+        lastErr = err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    throw new Error(`Agent health timeout for ${vmId} after ${timeoutMs}ms: ${String((lastErr as any)?.message ?? lastErr ?? "")}`);
+  }
+
+  private async tryCheckoutWarmVm(request: VmCreateRequest): Promise<VmPublic | null> {
+    if (!this.warmPool?.enabled || this.warmPoolVmIds.size === 0) return null;
+    // Host-side egress rules are installed when tap is created; avoid unsafe in-place rewrites on running warm VMs.
+    // Restrict checkout to the deny-all profile that warm VMs are preconfigured with.
+    if ((request.outboundInternet ?? false) || (request.allowIps ?? []).length > 0) return null;
+    const resolved = await this.images.resolveForVmCreate(request.imageId);
+    for (const vmId of this.warmPoolVmIds) {
+      const vm = await this.store.get(vmId);
+      if (!vm || vm.state !== "RUNNING" || vm.poolTag !== "warm") {
+        this.warmPoolVmIds.delete(vmId);
+        continue;
+      }
+      if (vm.cpu !== request.cpu || vm.memMb !== request.memMb) continue;
+      if ((vm.imageId ?? "") !== (resolved.imageId ?? "")) continue;
+
+      this.warmPoolVmIds.delete(vmId);
+      await this.store.update(vm.id, {
+        allowIps: request.allowIps,
+        outboundInternet: request.outboundInternet ?? false,
+        poolTag: undefined
+      });
+      const latest = await this.store.get(vm.id);
+      this.scheduleWarmPoolTopup();
+      return latest ? toPublic(latest) : null;
+    }
+    return null;
+  }
+
+  private scheduleWarmPoolTopup(): void {
+    if (!this.warmPool?.enabled || this.warmPool.target <= 0) return;
+    if (this.warmTopupRunning) return;
+    this.warmTopupRunning = true;
+    setTimeout(() => {
+      this.topupWarmPool()
+        .catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn("[warm-pool] topup failed", { err: String((err as any)?.message ?? err) });
+        })
+        .finally(() => {
+          this.warmTopupRunning = false;
+        });
+    }, 0);
+  }
+
+  private async topupWarmPool(): Promise<void> {
+    if (!this.warmPool?.enabled) return;
+    const target = Math.min(Math.max(0, this.warmPool.target), this.warmPool.maxVms);
+    if (target === 0) return;
+
+    const currentWarm = (await this.store.list()).filter((vm) => vm.poolTag === "warm" && vm.state !== "DELETED");
+    for (const vm of currentWarm) {
+      this.warmPoolVmIds.add(vm.id);
+    }
+    if (currentWarm.length >= target) return;
+
+    const deficit = Math.min(target - currentWarm.length, this.warmPool.maxVms);
+    for (let i = 0; i < deficit; i += 1) {
+      try {
+        const image = await this.images.resolveForVmCreate(undefined);
+        await this.create(
+          {
+            cpu: this.snapshots?.templateCpu ?? 1,
+            memMb: this.snapshots?.templateMemMb ?? 256,
+            allowIps: [],
+            outboundInternet: false,
+            imageId: image.imageId
+          },
+          { skipWarmCheckout: true, poolTag: "warm" }
+        );
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn("[warm-pool] failed to create warm VM", { err: String((err as any)?.message ?? err) });
+        return;
+      }
+    }
   }
 
   async start(id: string): Promise<void> {
@@ -503,6 +842,9 @@ export class VmService {
 
   async stop(id: string): Promise<void> {
     const vm = await this.requireVm(id);
+    if (vm.poolTag === "warm") {
+      this.warmPoolVmIds.delete(vm.id);
+    }
     if (vm.state !== "RUNNING") {
       throw new HttpError(409, `VM must be RUNNING to stop (state=${vm.state})`);
     }
@@ -515,11 +857,14 @@ export class VmService {
 
     // Stop the VM first so we don't clone the disk while it's being written to.
     await this.firecracker.stop(vm);
+    // Give host block flush a brief moment after VM exit before cloning the writable layer.
+    await new Promise((resolve) => setTimeout(resolve, 2500));
 
     // Now that the VM is stopped, clone the writable disk to persistent storage.
     // In overlay mode that's the overlay disk; in legacy mode it's the rootfs disk.
     const tSaveStart = Date.now();
     const writableDiskPath = vm.overlayPath || vm.rootfsPath;
+    await syncDiskFile(writableDiskPath);
     await this.storage.saveDiskToPersistent(vm.id, writableDiskPath);
     const saveMs = Date.now() - tSaveStart;
 
@@ -540,6 +885,7 @@ export class VmService {
 
   async destroy(id: string): Promise<void> {
     const vm = await this.requireVm(id);
+    this.warmPoolVmIds.delete(vm.id);
     const errors: string[] = [];
     await this.firecracker
       .destroy(vm)
@@ -562,6 +908,7 @@ export class VmService {
       // eslint-disable-next-line no-console
       console.warn("[vm-destroy] Completed with warnings", { vmId: vm.id, errors });
     }
+    this.scheduleWarmPoolTopup();
   }
 
   async exec(id: string, payload: { cmd: string; cwd?: string; env?: Record<string, string>; timeoutMs?: number }) {
@@ -828,4 +1175,22 @@ function clampTail(tail?: number): number {
   const parsed = typeof tail === "number" && Number.isFinite(tail) ? Math.floor(tail) : 200;
   if (parsed < 1) return 1;
   return Math.min(parsed, 1000);
+}
+
+function normalizeSnapshotId(raw?: string): string | undefined {
+  if (!raw) return undefined;
+  const value = String(raw).trim();
+  return value ? value : undefined;
+}
+
+async function syncDiskFile(filePath: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
+  try {
+    handle = await fs.open(filePath, "r");
+    await handle.sync();
+  } catch {
+    // Best-effort durability hint only.
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }

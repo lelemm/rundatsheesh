@@ -180,9 +180,6 @@ export class VsockAgentClient implements AgentClient {
 
   private async ensureVsockDevice(): Promise<void> {
     if (this.checkedVsockDevice) {
-      if (!this.vsockDeviceAvailable) {
-        throw new Error("vhost-vsock device not available at /dev/vhost-vsock");
-      }
       return;
     }
     this.checkedVsockDevice = true;
@@ -191,7 +188,11 @@ export class VsockAgentClient implements AgentClient {
       this.vsockDeviceAvailable = true;
     } catch {
       this.vsockDeviceAvailable = false;
-      throw new Error("vhost-vsock device not available at /dev/vhost-vsock");
+      // Firecracker/host setup is the source of truth for vsock availability.
+      // Do not hard-fail requests on this probe alone; actual vsock transport retries
+      // provide a more accurate signal and avoid false negatives in containerized runs.
+      // eslint-disable-next-line no-console
+      console.warn("[vsock] /dev/vhost-vsock not visible inside manager process; proceeding with transport retries");
     }
   }
 

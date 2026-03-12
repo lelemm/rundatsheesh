@@ -56,7 +56,7 @@ export function LandingPage() {
 # - RUN_DAT_SHEESH_DATA_DIR: host directory to persist manager state (DB, VM storage)
 # - RUN_DAT_SHEESH_IMAGES_DIR: host directory to store uploaded guest images (vmlinux + rootfs.ext4)
 # - ROOTFS_CLONE_MODE: "auto" is fine for most setups (advanced)
-# - ENABLE_SNAPSHOTS + SNAPSHOT_TEMPLATE_*: enable and size snapshot template VMs (optional)
+# - SNAPSHOT_TEMPLATE_*: size legacy template snapshot VMs (optional)
 cat > .env <<'ENV'
 API_KEY=dev-key
 ADMIN_EMAIL=admin@example.com
@@ -64,7 +64,6 @@ ADMIN_PASSWORD=admin
 RUN_DAT_SHEESH_DATA_DIR=./data
 RUN_DAT_SHEESH_IMAGES_DIR=./images
 ROOTFS_CLONE_MODE=auto
-ENABLE_SNAPSHOTS=false
 SNAPSHOT_TEMPLATE_CPU=1
 SNAPSHOT_TEMPLATE_MEM_MB=256
 ENV
@@ -117,7 +116,6 @@ services:
       IMAGES_DIR: /var/lib/run-dat-sheesh/images
       AGENT_VSOCK_PORT: 8080
       ROOTFS_CLONE_MODE: \${ROOTFS_CLONE_MODE:-auto}
-      ENABLE_SNAPSHOTS: \${ENABLE_SNAPSHOTS:-false}
       SNAPSHOT_TEMPLATE_CPU: \${SNAPSHOT_TEMPLATE_CPU:-1}
       SNAPSHOT_TEMPLATE_MEM_MB: \${SNAPSHOT_TEMPLATE_MEM_MB:-256}
     ports:

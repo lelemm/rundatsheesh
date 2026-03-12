@@ -17,7 +17,9 @@ export const vms = sqliteTable("vms", {
   kernelPath: text("kernel_path").notNull(),
   logsDir: text("logs_dir").notNull(),
   createdAt: text("created_at").notNull(),
-  provisionMode: text("provision_mode")
+  provisionMode: text("provision_mode"),
+  baseSeedSnapshotId: text("base_seed_snapshot_id"),
+  poolTag: text("pool_tag")
 });
 
 export const guestImages = sqliteTable("guest_images", {
@@ -29,7 +31,11 @@ export const guestImages = sqliteTable("guest_images", {
   rootfsFilename: text("rootfs_filename"),
   baseRootfsBytes: integer("base_rootfs_bytes", { mode: "number" }),
   kernelUploadedAt: text("kernel_uploaded_at"),
-  rootfsUploadedAt: text("rootfs_uploaded_at")
+  rootfsUploadedAt: text("rootfs_uploaded_at"),
+  seedSnapshotId: text("seed_snapshot_id"),
+  seedStatus: text("seed_status"),
+  seedUpdatedAt: text("seed_updated_at"),
+  seedError: text("seed_error")
 });
 
 export const settings = sqliteTable("settings", {

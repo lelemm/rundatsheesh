@@ -9,7 +9,6 @@ const API_KEY = process.env.API_KEY ?? "dev-key";
 const MANAGER_BASE = process.env.MANAGER_BASE ?? "http://127.0.0.1:3000";
 const MAX_CREATE_MS = process.env.MAX_CREATE_MS ? Number(process.env.MAX_CREATE_MS) : null;
 const OVERLAY_MAX_CREATE_MS = process.env.OVERLAY_MAX_CREATE_MS ? Number(process.env.OVERLAY_MAX_CREATE_MS) : 5000;
-const ENABLE_SNAPSHOTS = (process.env.ENABLE_SNAPSHOTS ?? "false").toLowerCase() === "true";
 const VM_IMAGE_ID = process.env.VM_IMAGE_ID || "";
 
 function mustExec(cmd: string, args: string[], opts?: { cwd?: string; env?: NodeJS.ProcessEnv; stdio?: "inherit" | "pipe" }) {
@@ -34,9 +33,13 @@ async function waitForManager(): Promise<void> {
 }
 
 async function apiJson<T>(method: string, url: string, body?: unknown): Promise<{ status: number; json: T }> {
+  const headers: Record<string, string> = { "X-API-Key": API_KEY };
+  if (body !== undefined) {
+    headers["Content-Type"] = "application/json";
+  }
   const res = await fetch(url, {
     method,
-    headers: { "X-API-Key": API_KEY, "Content-Type": "application/json" },
+    headers,
     body: body ? JSON.stringify(body) : undefined
   });
   const text = await res.text();
@@ -69,15 +72,36 @@ type VmPublic = {
   outboundInternet: boolean;
   createdAt: string;
   provisionMode?: "boot" | "snapshot";
+  imageId?: string;
 };
-type SnapshotMeta = { id: string; kind: string; createdAt: string; cpu: number; memMb: number; sourceVmId?: string; hasDisk: boolean };
+type SnapshotMeta = {
+  id: string;
+  kind: string;
+  createdAt: string;
+  cpu: number;
+  memMb: number;
+  imageId?: string;
+  sourceVmId?: string;
+  hasDisk: boolean;
+  hasOverlay?: boolean;
+};
 
-async function createVm(payload: { cpu: number; memMb: number; allowIps: string[]; outboundInternet: boolean }): Promise<VmPublic> {
+async function createVm(payload: {
+  cpu: number;
+  memMb: number;
+  allowIps: string[];
+  outboundInternet: boolean;
+  imageId?: string;
+  userOverlaySnapshotId?: string;
+  snapshotId?: string;
+  diskSizeMb?: number;
+}): Promise<VmPublic> {
   const started = Date.now();
-  const { status, json } = await apiJson<VmPublic>("POST", `${MANAGER_BASE}/v1/vms`, {
-    ...payload,
-    ...(VM_IMAGE_ID ? { imageId: VM_IMAGE_ID } : {})
-  });
+  const body: Record<string, unknown> = { ...payload };
+  if (!("imageId" in body) && VM_IMAGE_ID) {
+    body.imageId = VM_IMAGE_ID;
+  }
+  const { status, json } = await apiJson<VmPublic>("POST", `${MANAGER_BASE}/v1/vms`, body);
   expect(status).toBe(201);
   expect(json.id).toBeTruthy();
   const elapsedMs = Date.now() - started;
@@ -108,7 +132,10 @@ async function createSnapshot(vmId: string): Promise<SnapshotMeta> {
   const { status, json } = await apiJson<SnapshotMeta>("POST", `${MANAGER_BASE}/v1/vms/${vmId}/snapshots`);
   expect(status).toBe(201);
   expect(json.id).toBeTruthy();
-  expect(json.hasDisk).toBe(true);
+  expect(json.kind === "user_overlay" || json.kind === "vm").toBe(true);
+  if (json.kind === "user_overlay") {
+    expect(json.hasOverlay).toBe(true);
+  }
   return json;
 }
 
@@ -116,6 +143,25 @@ async function listSnapshots(): Promise<SnapshotMeta[]> {
   const { status, json } = await apiJson<SnapshotMeta[]>("GET", `${MANAGER_BASE}/v1/snapshots`);
   expect(status).toBe(200);
   return json;
+}
+
+async function listSnapshotsWithScope(scope: "user" | "internal" | "all"): Promise<SnapshotMeta[]> {
+  const { status, json } = await apiJson<SnapshotMeta[]>("GET", `${MANAGER_BASE}/v1/snapshots?scope=${scope}`);
+  expect(status).toBe(200);
+  return json;
+}
+
+async function waitForImageSeedSnapshot(imageId?: string, timeoutMs = 120000): Promise<SnapshotMeta> {
+  const started = Date.now();
+  for (;;) {
+    const items = await listSnapshotsWithScope("internal");
+    const seed = items.find((s) => s.kind === "image_seed" && (!imageId || s.imageId === imageId));
+    if (seed) return seed;
+    if (Date.now() - started > timeoutMs) {
+      throw new Error(`Timed out waiting for image seed snapshot (imageId=${imageId ?? "any"})`);
+    }
+    await delay(1000);
+  }
 }
 
 async function stopVm(vmId: string): Promise<void> {
@@ -232,7 +278,7 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   beforeAll(async () => {
     await waitForManager();
     // eslint-disable-next-line no-console
-    console.info("[it] snapshots enabled?", { ENABLE_SNAPSHOTS, MAX_CREATE_MS });
+    console.info("[it] integration config", { MAX_CREATE_MS });
 
     vmDeny = (await createVm({ cpu: 1, memMb: 256, allowIps: ["1.2.3.4/32"], outboundInternet: true })).id;
     vmOk = (await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true })).id;
@@ -640,19 +686,32 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     expect(status).toBe(400);
   });
 
-  it("snapshots: template-sized VM uses snapshot provision mode", async () => {
-    if (!ENABLE_SNAPSHOTS) return;
-    const vm = await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true });
-    try {
-      expect(vm.provisionMode).toBe("snapshot");
-    } finally {
-      await deleteVm(vm.id);
+  it("snapshots: image seed snapshot is auto-created and hidden from default user scope", async () => {
+    const vm = await getVm(vmOk);
+    const seed = await waitForImageSeedSnapshot(vm.imageId);
+    expect(seed.kind).toBe("image_seed");
+    if (vm.imageId) {
+      expect(seed.imageId).toBe(vm.imageId);
     }
+
+    const userList = await listSnapshots();
+    expect(userList.some((s) => s.kind === "image_seed")).toBe(false);
   });
 
-  it("snapshots: non-template size falls back to boot provision mode", async () => {
-    if (!ENABLE_SNAPSHOTS) return;
-    const vm = await createVm({ cpu: 1, memMb: 512, allowIps: ["172.16.0.1/32"], outboundInternet: true });
+  it("snapshots: supports explicit scope filtering", async () => {
+    const userList = await listSnapshotsWithScope("user");
+    expect(userList.some((s) => s.kind === "image_seed")).toBe(false);
+
+    const internalList = await listSnapshotsWithScope("internal");
+    expect(internalList.some((s) => s.kind === "image_seed")).toBe(true);
+
+    const allList = await listSnapshotsWithScope("all");
+    expect(allList.length).toBeGreaterThanOrEqual(userList.length);
+    expect(allList.length).toBeGreaterThanOrEqual(internalList.length);
+  });
+
+  it("snapshots: defaults to boot mode when no legacy template snapshot artifact exists", async () => {
+    const vm = await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true });
     try {
       expect(vm.provisionMode).toBe("boot");
     } finally {
@@ -661,17 +720,21 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   });
 
   it("snapshots: guest eth0 IPv4 matches VM guestIp", async () => {
-    if (!ENABLE_SNAPSHOTS) return;
     const vm = await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true });
     try {
       const info = await getVm(vm.id);
-      const res = await vmExec(vm.id, "ip -4 -o addr show dev eth0 | awk '{print $4}'");
-      expect(res.exitCode).toBe(0);
-      const ips = res.stdout
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((s) => s.split("/")[0]);
+      let ips: string[] = [];
+      for (let i = 0; i < 20; i += 1) {
+        const res = await vmExec(vm.id, "ip -4 -o addr show dev eth0 | awk '{print $4}'");
+        expect(res.exitCode).toBe(0);
+        ips = res.stdout
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean)
+          .map((s) => s.split("/")[0]);
+        if (ips.includes(info.guestIp)) break;
+        await delay(250);
+      }
       expect(ips).toContain(info.guestIp);
     } finally {
       await deleteVm(vm.id);
@@ -679,16 +742,16 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
   });
 
   it("snapshots: can snapshot a configured VM (with /home/user sdk files) and spawn multiple VMs from it", async () => {
-    if (!ENABLE_SNAPSHOTS) return;
-
     // 1) Create base VM (cold or template snapshot; doesn't matter).
     const base = await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true });
     let snap: SnapshotMeta | null = null;
+    const sdkPath = `/workspace/sdk-${Date.now()}.txt`;
     try {
       // 2) Upload SDK file into /home/user (simulate user-provided SDK).
-      const sdkPath = `/workspace/sdk-${Date.now()}.txt`;
       const write = await vmExec(base.id, `echo "sdk-ok" > ${sdkPath}`);
       expect(write.exitCode).toBe(0);
+      const sync = await vmExec(base.id, "sync");
+      expect(sync.exitCode).toBe(0);
 
       // 3) Snapshot this VM, then destroy it.
       snap = await createSnapshot(base.id);
@@ -702,17 +765,17 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
 
     // 4) Create two VMs from the same snapshot in parallel.
     const [a, b] = await Promise.all([
-      createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: snap!.id } as any),
-      createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, snapshotId: snap!.id } as any)
+      createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, userOverlaySnapshotId: snap!.id } as any),
+      createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, userOverlaySnapshotId: snap!.id } as any)
     ]);
 
     try {
-      expect(a.provisionMode).toBe("snapshot");
-      expect(b.provisionMode).toBe("snapshot");
+      expect(a.id).toBeTruthy();
+      expect(b.id).toBeTruthy();
 
       // Each VM should see the SDK file from the snapshot disk baseline.
-      const checkA = await vmExec(a.id, `cat /workspace/sdk-*.txt | tail -n 1`);
-      const checkB = await vmExec(b.id, `cat /workspace/sdk-*.txt | tail -n 1`);
+      const checkA = await vmExec(a.id, `cat ${sdkPath}`);
+      const checkB = await vmExec(b.id, `cat ${sdkPath}`);
       expect(checkA.exitCode).toBe(0);
       expect(checkB.exitCode).toBe(0);
       expect(checkA.stdout.trim()).toBe("sdk-ok");
@@ -726,6 +789,36 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
       expect(isoB.exitCode).not.toBe(0);
     } finally {
       await Promise.all([deleteVm(a.id), deleteVm(b.id)]);
+    }
+  });
+
+  it("snapshots: legacy snapshotId alias works for user overlay snapshot restore", async () => {
+    const base = await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true });
+    let snap: SnapshotMeta | null = null;
+    const marker = `/workspace/alias-marker-${Date.now()}.txt`;
+    try {
+      const write = await vmExec(base.id, `echo "alias-ok" > ${marker}`);
+      expect(write.exitCode).toBe(0);
+      const sync = await vmExec(base.id, "sync");
+      expect(sync.exitCode).toBe(0);
+      snap = await createSnapshot(base.id);
+    } finally {
+      await deleteVm(base.id);
+    }
+
+    const restored = await createVm({
+      cpu: 1,
+      memMb: 256,
+      allowIps: ["172.16.0.1/32"],
+      outboundInternet: true,
+      snapshotId: snap!.id
+    });
+    try {
+      const check = await vmExec(restored.id, `cat ${marker}`);
+      expect(check.exitCode).toBe(0);
+      expect(check.stdout.trim()).toBe("alias-ok");
+    } finally {
+      await deleteVm(restored.id);
     }
   });
 
@@ -1447,6 +1540,8 @@ result.set({
       // eslint-disable-next-line no-console
       console.info("[it] power-cycle: create marker file", { exitCode: createMarker.exitCode });
       expect(createMarker.exitCode).toBe(0);
+      const syncMarker = await vmExec(vm.id, "sync");
+      expect(syncMarker.exitCode).toBe(0);
       
       // Step 5: Stop the VM
       // eslint-disable-next-line no-console

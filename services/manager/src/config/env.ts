@@ -20,9 +20,15 @@ export interface EnvConfig {
   };
   rootfsCloneMode: "auto" | "reflink" | "copy";
   overlaySizeBytes: number;
-  enableSnapshots: boolean;
+  firecrackerLogLevel: "Error" | "Warning" | "Info" | "Debug";
+  overlayDeviceWaitMs: number;
   snapshotTemplateCpu: number;
   snapshotTemplateMemMb: number;
+  warmPool: {
+    enabled: boolean;
+    target: number;
+    maxVms: number;
+  };
   limits: {
     maxVms: number;
     maxCpu: number;
@@ -52,6 +58,13 @@ export function loadEnv(): EnvConfig {
     const n = Number(raw ?? String(fallback));
     if (!Number.isFinite(n) || n <= 0) {
       throw new Error(`${name} must be a positive number`);
+    }
+    return Math.floor(n);
+  };
+  const parseNonNegativeInt = (raw: string | undefined, name: string, fallback: number) => {
+    const n = Number(raw ?? String(fallback));
+    if (!Number.isFinite(n) || n < 0) {
+      throw new Error(`${name} must be a non-negative number`);
     }
     return Math.floor(n);
   };
@@ -122,8 +135,15 @@ export function loadEnv(): EnvConfig {
 
   // Overlay mode is always enabled; this controls only the writable overlay disk size.
   const overlaySizeBytes = parsePositiveInt(process.env.OVERLAY_SIZE_BYTES, "OVERLAY_SIZE_BYTES", 512 * 1024 * 1024);
+  const overlayDeviceWaitMs = parsePositiveInt(process.env.OVERLAY_DEVICE_WAIT_MS, "OVERLAY_DEVICE_WAIT_MS", 200);
 
-  const enableSnapshots = (process.env.ENABLE_SNAPSHOTS ?? "false").toLowerCase() === "true";
+  const firecrackerLogLevelRaw = (process.env.FIRECRACKER_LOG_LEVEL ?? "Warning").trim();
+  const firecrackerLogLevel = (["Error", "Warning", "Info", "Debug"] as const).includes(firecrackerLogLevelRaw as any)
+    ? (firecrackerLogLevelRaw as "Error" | "Warning" | "Info" | "Debug")
+    : null;
+  if (!firecrackerLogLevel) {
+    throw new Error("FIRECRACKER_LOG_LEVEL must be one of: Error, Warning, Info, Debug");
+  }
 
   const snapshotTemplateCpuRaw = process.env.SNAPSHOT_TEMPLATE_CPU ?? "1";
   const snapshotTemplateCpu = Number(snapshotTemplateCpuRaw);
@@ -142,6 +162,10 @@ export function loadEnv(): EnvConfig {
   if (dnsServerIp && !/^(?:\d{1,3}\.){3}\d{1,3}$/.test(dnsServerIp)) {
     throw new Error("DNS_SERVER_IP must be an IPv4 address");
   }
+
+  const warmPoolEnabled = (process.env.ENABLE_WARM_POOL ?? "false").toLowerCase() === "true";
+  const warmPoolTarget = parseNonNegativeInt(process.env.WARM_POOL_TARGET, "WARM_POOL_TARGET", 1);
+  const warmPoolMaxVms = parsePositiveInt(process.env.WARM_POOL_MAX_VMS, "WARM_POOL_MAX_VMS", 4);
 
   return {
     apiKey,
@@ -165,9 +189,15 @@ export function loadEnv(): EnvConfig {
     },
     rootfsCloneMode,
     overlaySizeBytes,
-    enableSnapshots,
+    firecrackerLogLevel,
+    overlayDeviceWaitMs,
     snapshotTemplateCpu,
     snapshotTemplateMemMb,
+    warmPool: {
+      enabled: warmPoolEnabled,
+      target: warmPoolEnabled ? warmPoolTarget : 0,
+      maxVms: warmPoolMaxVms
+    },
     limits: {
       maxVms: parsePositiveInt(process.env.MAX_VMS, "MAX_VMS", 20),
       maxCpu: parsePositiveInt(process.env.MAX_CPU, "MAX_CPU", 4),
@@ -177,7 +207,7 @@ export function loadEnv(): EnvConfig {
       maxRunTsTimeoutMs: parsePositiveInt(process.env.MAX_RUNTS_TIMEOUT_MS, "MAX_RUNTS_TIMEOUT_MS", 120_000)
     },
     vsock: {
-      retryAttempts: parsePositiveInt(process.env.VSOCK_RETRY_ATTEMPTS, "VSOCK_RETRY_ATTEMPTS", 30),
+      retryAttempts: parsePositiveInt(process.env.VSOCK_RETRY_ATTEMPTS, "VSOCK_RETRY_ATTEMPTS", 150),
       retryDelayMs: parsePositiveInt(process.env.VSOCK_RETRY_DELAY_MS, "VSOCK_RETRY_DELAY_MS", 100),
       timeoutMs: parsePositiveInt(process.env.VSOCK_TIMEOUT_MS, "VSOCK_TIMEOUT_MS", 15_000),
       healthTimeoutMs: parsePositiveInt(process.env.VSOCK_HEALTH_TIMEOUT_MS, "VSOCK_HEALTH_TIMEOUT_MS", 15_000),

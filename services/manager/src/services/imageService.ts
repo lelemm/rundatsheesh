@@ -17,6 +17,10 @@ export type GuestImageRow = {
   baseRootfsBytes?: number | null;
   kernelUploadedAt?: string | null;
   rootfsUploadedAt?: string | null;
+  seedSnapshotId?: string | null;
+  seedStatus?: "pending" | "ready" | "failed" | null;
+  seedUpdatedAt?: string | null;
+  seedError?: string | null;
 };
 
 export type GuestImageListItem = GuestImageRow & {
@@ -65,6 +69,10 @@ export class ImageService {
         baseRootfsBytes: r.baseRootfsBytes ?? null,
         kernelUploadedAt: r.kernelUploadedAt ?? null,
         rootfsUploadedAt: r.rootfsUploadedAt ?? null,
+        seedSnapshotId: r.seedSnapshotId ?? null,
+        seedStatus: r.seedStatus ?? null,
+        seedUpdatedAt: r.seedUpdatedAt ?? null,
+        seedError: r.seedError ?? null,
         isDefault: defId === String(r.id),
         hasKernel: Boolean(kernelFilename),
         hasRootfs: Boolean(rootfsFilename)
@@ -84,7 +92,11 @@ export class ImageService {
       createdAt,
       kernelFilename: null,
       rootfsFilename: null,
-      baseRootfsBytes: null
+      baseRootfsBytes: null,
+      seedSnapshotId: null,
+      seedStatus: null,
+      seedUpdatedAt: null,
+      seedError: null
     };
     await this.db.insert(this.guestImages).values(row);
     return row;
@@ -120,7 +132,11 @@ export class ImageService {
       rootfsFilename: r.rootfsFilename ?? null,
       baseRootfsBytes: r.baseRootfsBytes ?? null,
       kernelUploadedAt: r.kernelUploadedAt ?? null,
-      rootfsUploadedAt: r.rootfsUploadedAt ?? null
+      rootfsUploadedAt: r.rootfsUploadedAt ?? null,
+      seedSnapshotId: r.seedSnapshotId ?? null,
+      seedStatus: r.seedStatus ?? null,
+      seedUpdatedAt: r.seedUpdatedAt ?? null,
+      seedError: r.seedError ?? null
     };
   }
 
@@ -148,6 +164,30 @@ export class ImageService {
     await this.db
       .update(this.guestImages)
       .set({ rootfsFilename: filename, baseRootfsBytes: st.size, rootfsUploadedAt: now })
+      .where(eq(this.guestImages.id, imageId));
+  }
+
+  async markSeedPending(imageId: string): Promise<void> {
+    const now = new Date().toISOString();
+    await this.db
+      .update(this.guestImages)
+      .set({ seedStatus: "pending", seedUpdatedAt: now, seedError: null })
+      .where(eq(this.guestImages.id, imageId));
+  }
+
+  async markSeedReady(imageId: string, seedSnapshotId: string): Promise<void> {
+    const now = new Date().toISOString();
+    await this.db
+      .update(this.guestImages)
+      .set({ seedStatus: "ready", seedSnapshotId, seedUpdatedAt: now, seedError: null })
+      .where(eq(this.guestImages.id, imageId));
+  }
+
+  async markSeedFailed(imageId: string, message: string): Promise<void> {
+    const now = new Date().toISOString();
+    await this.db
+      .update(this.guestImages)
+      .set({ seedStatus: "failed", seedUpdatedAt: now, seedError: message.slice(0, 4000) })
       .where(eq(this.guestImages.id, imageId));
   }
 
@@ -195,4 +235,3 @@ export class ImageService {
     throw new HttpError(400, "No default image configured; upload an image and set it as default");
   }
 }
-

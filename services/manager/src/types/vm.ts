@@ -26,6 +26,8 @@ export interface VmRecord {
   logsDir: string;
   createdAt: string;
   provisionMode?: VmProvisionMode;
+  baseSeedSnapshotId?: string;
+  poolTag?: "warm";
 }
 
 export interface VmPublic {
@@ -45,6 +47,8 @@ export interface VmCreateRequest {
   memMb: number;
   allowIps: string[];
   outboundInternet?: boolean;
+  userOverlaySnapshotId?: string;
+  /** @deprecated Prefer userOverlaySnapshotId; kept for backward compatibility. */
   snapshotId?: string;
   imageId?: string;
   diskSizeMb?: number;
