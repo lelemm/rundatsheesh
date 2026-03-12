@@ -29,7 +29,7 @@ RUN set -eux; \
 FROM debian:bookworm AS guest-image-builder
 
 ARG KERNEL_VERSION=5.10.210
-ARG KERNEL_CONFIG_URL=https://raw.githubusercontent.com/firecracker-microvm/firecracker/main/resources/guest_configs/microvm-kernel-x86_64-5.10.config
+ARG KERNEL_CONFIG_URL=https://raw.githubusercontent.com/firecracker-microvm/firecracker/main/resources/guest_configs/microvm-kernel-ci-x86_64-5.10.config
 ARG NODE_VERSION=20.11.1
 
 # Shell variant: "busybox" (default, more confined) or "bash" (NVM support)
@@ -38,7 +38,7 @@ ARG SHELL_VARIANT=busybox
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      build-essential bc bison flex libssl-dev libelf-dev \
-     ca-certificates curl wget xz-utils \
+     ca-certificates curl wget xz-utils python3 \
      debootstrap e2fsprogs kmod cpio \
   && rm -rf /var/lib/apt/lists/*
 

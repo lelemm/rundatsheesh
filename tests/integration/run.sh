@@ -16,6 +16,7 @@ SNAPSHOT_TEMPLATE_MEM_MB=${SNAPSHOT_TEMPLATE_MEM_MB:-256}
 # - "alpine-bash"  - Alpine with bash shell and NVM support
 # - unset/empty    - run all images
 INTEGRATION_IMAGE=${INTEGRATION_IMAGE:-}
+VITEST_FILTER=${VITEST_FILTER:-}
 
 require_dep() {
   local dep="$1"
@@ -216,6 +217,14 @@ set_default() {
   curl -sf -X POST -H "X-API-Key: $API_KEY" "$MANAGER_BASE/v1/images/$image_id/set-default" >/dev/null
 }
 
+run_vitest() {
+  if [ -n "$VITEST_FILTER" ]; then
+    npm -s run test:vitest -- -t "$VITEST_FILTER"
+    return
+  fi
+  npm -s run test:vitest
+}
+
 DEBIAN_ID=""
 DEBIAN_BASH_ID=""
 ALPINE_ID=""
@@ -272,14 +281,14 @@ if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "debian" ]; then
   echo "=== integration: debian image (busybox) ==="
   unset VM_IMAGE_ID
   unset TEST_BASH_IMAGE
-  npm -s run test:vitest || { FAILED=1; exit 1; }
+  run_vitest || { FAILED=1; exit 1; }
 fi
 
 if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "debian-bash" ]; then
   echo "=== integration: debian-bash image (with NVM) ==="
   export VM_IMAGE_ID="$DEBIAN_BASH_ID"
   export TEST_BASH_IMAGE=true
-  npm -s run test:vitest || { FAILED=1; exit 1; }
+  run_vitest || { FAILED=1; exit 1; }
   unset TEST_BASH_IMAGE
 fi
 
@@ -287,13 +296,13 @@ if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "alpine" ]; then
   echo "=== integration: alpine image (busybox) ==="
   export VM_IMAGE_ID="$ALPINE_ID"
   unset TEST_BASH_IMAGE
-  npm -s run test:vitest || { FAILED=1; exit 1; }
+  run_vitest || { FAILED=1; exit 1; }
 fi
 
 if [ -z "$INTEGRATION_IMAGE" ] || [ "$INTEGRATION_IMAGE" = "alpine-bash" ]; then
   echo "=== integration: alpine-bash image (with NVM) ==="
   export VM_IMAGE_ID="$ALPINE_BASH_ID"
   export TEST_BASH_IMAGE=true
-  npm -s run test:vitest || { FAILED=1; exit 1; }
+  run_vitest || { FAILED=1; exit 1; }
   unset TEST_BASH_IMAGE
 fi

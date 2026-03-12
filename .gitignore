@@ -23,3 +23,5 @@ Thumbs.db
 db/
 plans/
 .zip
+debugging.sh
+.debug/

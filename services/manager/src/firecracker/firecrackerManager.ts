@@ -379,10 +379,10 @@ export class FirecrackerManagerImpl implements FirecrackerManager {
     if (proc) {
       const exited = await waitForExit(proc, 15_000).catch(() => false);
       if (!exited) {
-        proc.kill("SIGTERM");
-        const termExited = await waitForExit(proc, 5_000).catch(() => false);
+        const termSent = signalSafe(proc, "SIGTERM");
+        const termExited = await waitForExit(proc, termSent ? 5_000 : 1_000).catch(() => false);
         if (!termExited) {
-          proc.kill("SIGKILL");
+          signalSafe(proc, "SIGKILL");
           await waitForExit(proc, 2_000).catch(() => undefined);
         }
       }
@@ -493,12 +493,38 @@ async function waitForSocket(socketPath: string, timeoutMs = 5000): Promise<void
 }
 
 async function waitForExit(proc: ReturnType<typeof spawn>, timeoutMs: number): Promise<boolean> {
-  if (proc.exitCode !== null) return true;
+  if (hasExited(proc)) return true;
   return new Promise((resolve) => {
-    const t = setTimeout(() => resolve(false), timeoutMs);
-    proc.once("exit", () => {
+    let settled = false;
+    const finish = (value: boolean) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(t);
-      resolve(true);
-    });
+      proc.off("exit", onExit);
+      proc.off("close", onClose);
+      resolve(value);
+    };
+    const onExit = () => finish(true);
+    const onClose = () => finish(true);
+    const t = setTimeout(() => finish(hasExited(proc)), timeoutMs);
+    proc.once("exit", onExit);
+    proc.once("close", onClose);
+    if (hasExited(proc)) finish(true);
   });
+}
+
+function hasExited(proc: ReturnType<typeof spawn>): boolean {
+  return proc.exitCode !== null || proc.signalCode !== null;
+}
+
+function signalSafe(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): boolean {
+  try {
+    return proc.kill(signal);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "EPERM" || code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
 }

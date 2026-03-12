@@ -15,12 +15,12 @@ RUN npm prune --omit=dev
 FROM debian:bookworm AS kernel-builder
 
 ARG KERNEL_VERSION=5.10.210
-ARG KERNEL_CONFIG_URL=https://raw.githubusercontent.com/firecracker-microvm/firecracker/main/resources/guest_configs/microvm-kernel-x86_64-5.10.config
+ARG KERNEL_CONFIG_URL=https://raw.githubusercontent.com/firecracker-microvm/firecracker/main/resources/guest_configs/microvm-kernel-ci-x86_64-5.10.config
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
      build-essential bc bison flex libssl-dev libelf-dev \
-     ca-certificates curl wget xz-utils \
+     ca-certificates curl wget xz-utils python3 \
      kmod cpio \
   && rm -rf /var/lib/apt/lists/*
 
@@ -49,7 +49,7 @@ RUN set -eux; \
     --repositories-file /etc/apk/repositories \
     --keys-dir /etc/apk/keys \
     alpine-baselayout busybox \
-    ca-certificates bash coreutils tar gzip unzip curl \
+    ca-certificates bash coreutils diffutils patch tar gzip unzip curl \
     iproute2 iptables nftables socat \
     busybox-static \
     nodejs npm \
@@ -80,6 +80,10 @@ RUN set -eux; \
   mkdir -p /rootfs/opt/sandbox/bin /rootfs/opt/sandbox/dev /rootfs/opt/sandbox/tmp; \
   mkdir -p /rootfs/opt/sandbox/usr/bin /rootfs/opt/sandbox/etc/ssl/certs; \
   mkdir -p /rootfs/opt/sandbox/home/user /rootfs/opt/sandbox/workspace; \
+  mkdir -p /rootfs/opt/sandbox/proc /rootfs/opt/sandbox/var/tmp /rootfs/opt/sandbox/etc; \
+  touch /rootfs/opt/sandbox/etc/resolv.conf /rootfs/opt/sandbox/etc/hosts /rootfs/opt/sandbox/etc/nsswitch.conf; \
+  chmod 1777 /rootfs/opt/sandbox/var/tmp; \
+  mkdir -p /rootfs/mnt/overlay /rootfs/mnt/merged; \
   # Device nodes inside the /opt/sandbox chroot (needed for both variants)
   mknod -m 666 /rootfs/opt/sandbox/dev/null c 1 3 || true; \
   mknod -m 666 /rootfs/opt/sandbox/dev/zero c 1 5 || true; \
@@ -141,7 +145,7 @@ RUN set -eux; \
     # Create /bin/sh symlink to bash
     ln -sf bash /rootfs/opt/sandbox/bin/sh; \
     # Stage GNU coreutils - all essential commands for NVM and general use
-    for cmd in ls head tail sort cut tr dirname basename wc cat tee mkdir rm mv cp chmod chown ln readlink mktemp sleep date touch env id whoami uname expr seq test printf echo true false yes xargs find; do \
+    for cmd in ls head tail sort cut tr dirname basename wc cat tee mkdir rm mv cp chmod chown ln readlink mktemp sleep date touch env id whoami uname expr seq test printf echo true false yes xargs find sync diff diff3 sdiff cmp comm patch; do \
       stage_cmd "$cmd" || true; \
     done; \
     # Stage grep, sed, awk - text processing
@@ -385,4 +389,3 @@ COPY --from=kernel-builder /build/linux-*/vmlinux /out/vmlinux
 
 FROM scratch AS export
 COPY --from=guest-image-builder /out /out
-

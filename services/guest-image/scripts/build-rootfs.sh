@@ -41,7 +41,7 @@ passwd -l root || true
 
 apt-get update
 apt-get install -y --no-install-recommends \
-  ca-certificates bash coreutils tar gzip unzip \
+  ca-certificates bash coreutils diffutils patch tar gzip unzip \
   iproute2 iptables nftables socat curl busybox-static \
   git
 apt-get clean
@@ -54,6 +54,13 @@ mkdir -p /home/user /opt/guest-agent /home/user/.deno /home/user/.tmp /home/user
 SANDBOX_ROOT=/opt/sandbox
 mkdir -p "\$SANDBOX_ROOT/bin" "\$SANDBOX_ROOT/dev" "\$SANDBOX_ROOT/tmp" "\$SANDBOX_ROOT/usr/bin" "\$SANDBOX_ROOT/etc/ssl/certs"
 mkdir -p "\$SANDBOX_ROOT/home/user" "\$SANDBOX_ROOT/workspace"
+mkdir -p "\$SANDBOX_ROOT/proc" "\$SANDBOX_ROOT/var/tmp" "\$SANDBOX_ROOT/etc"
+touch "\$SANDBOX_ROOT/etc/resolv.conf" "\$SANDBOX_ROOT/etc/hosts" "\$SANDBOX_ROOT/etc/nsswitch.conf"
+chmod 1777 "\$SANDBOX_ROOT/var/tmp"
+
+# Guest init mounts the writable overlay and pivots into it very early in boot.
+# These mount points must already exist because the base root is mounted read-only.
+mkdir -p /mnt/overlay /mnt/merged
 
 stage_file_into_user_chroot() {
   local f="\$1"
@@ -130,7 +137,7 @@ if [ "\$SHELL_VARIANT" = "bash" ]; then
   ln -sf bash "\$SANDBOX_ROOT/bin/sh"
   
   # Stage GNU coreutils - all essential commands for NVM and general use
-  for cmd in ls head tail sort cut tr dirname basename wc cat tee mkdir rm mv cp chmod chown ln readlink mktemp sleep date touch env id whoami uname expr seq test printf echo true false yes xargs find; do
+  for cmd in ls head tail sort cut tr dirname basename wc cat tee mkdir rm mv cp chmod chown ln readlink mktemp sleep date touch env id whoami uname expr seq test printf echo true false yes xargs find sync diff diff3 sdiff cmp comm patch; do
     stage_cmd "\$cmd" || true
   done
   
