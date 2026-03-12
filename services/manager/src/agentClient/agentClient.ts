@@ -26,8 +26,17 @@ export class VsockAgentClient implements AgentClient {
     await this.request(vmId, "GET", "/health", undefined, { timeoutMs: this.options.timeouts?.healthMs });
   }
 
-  async applyAllowlist(vmId: string, allowIps: string[], outboundInternet: boolean): Promise<void> {
-    await this.request(vmId, "POST", "/firewall/allowlist", { allowIps, outboundInternet });
+  async applyAllowlist(
+    vmId: string,
+    allowIps: string[],
+    outboundInternet: boolean,
+    options?: { allowManagerGateway?: boolean }
+  ): Promise<void> {
+    await this.request(vmId, "POST", "/firewall/allowlist", {
+      allowIps,
+      outboundInternet,
+      allowManagerGateway: Boolean(options?.allowManagerGateway)
+    });
   }
 
   async configureNetwork(
@@ -62,6 +71,13 @@ export class VsockAgentClient implements AgentClient {
 
   async download(vmId: string, path: string): Promise<Buffer> {
     return this.requestBinary(vmId, "GET", `/files/download?path=${encodeURIComponent(path)}`);
+  }
+
+  async replaceTree(vmId: string, dest: string, data: Buffer, options?: { ownership?: "root" | "user"; readOnly?: boolean }): Promise<void> {
+    const ownership = options?.ownership ?? "root";
+    const readOnly = options?.readOnly ?? false;
+    const query = `/internal/files/replace-tree?dest=${encodeURIComponent(dest)}&ownership=${encodeURIComponent(ownership)}&readOnly=${String(readOnly)}`;
+    await this.requestBinary(vmId, "POST", query, data);
   }
 
   private async request<T>(

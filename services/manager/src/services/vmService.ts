@@ -8,6 +8,7 @@ import { HttpError } from "../api/httpErrors.js";
 import type { ActivityService } from "../telemetry/activityService.js";
 import type { ImageService } from "./imageService.js";
 import { ExecLogService } from "./execLogService.js";
+import type { PeerService } from "./peer/peerService.js";
 
 const LOG_FILES = new Set(["firecracker.log", "firecracker.stdout.log", "firecracker.stderr.log"]);
 
@@ -18,6 +19,7 @@ export interface VmServiceOptions {
   agentClient: AgentClient;
   storage: StorageProvider;
   images: ImageService;
+  peerService?: PeerService;
   activity?: ActivityService;
   snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   vsockCidStart?: number;
@@ -44,6 +46,7 @@ export class VmService {
   private readonly agentClient: AgentClient;
   private readonly storage: StorageProvider;
   private readonly images: ImageService;
+  readonly peerService?: PeerService;
   private readonly activity?: ActivityService;
   private readonly snapshots?: { enabled: boolean; version: string; templateCpu: number; templateMemMb: number };
   private readonly limits: NonNullable<VmServiceOptions["limits"]>;
@@ -62,6 +65,7 @@ export class VmService {
     this.agentClient = options.agentClient;
     this.storage = options.storage;
     this.images = options.images;
+    this.peerService = options.peerService;
     this.activity = options.activity;
     this.snapshots = options.snapshots;
     this.dnsServerIp = options.dnsServerIp;
@@ -84,7 +88,9 @@ export class VmService {
   async list(): Promise<VmPublic[]> {
     const items = await this.store.list();
     // Deleted VMs are tombstoned (for auditing/logging) but should not appear in normal listings.
-    return items.filter((vm) => vm.state !== "DELETED" && vm.poolTag !== "warm").map((vm) => toPublic(vm));
+    const visible = items.filter((vm) => vm.state !== "DELETED" && vm.poolTag !== "warm").map((vm) => toPublic(vm));
+    if (!this.peerService) return visible;
+    return Promise.all(visible.map((vm) => this.peerService!.decorateVmPublic(vm)));
   }
 
   async get(id: string): Promise<VmPublic | null> {
@@ -92,11 +98,13 @@ export class VmService {
     if (!vm) return null;
     if (vm.state === "DELETED") return null;
     if (vm.poolTag === "warm") return null;
-    return toPublic(vm);
+    const pub = toPublic(vm);
+    return this.peerService ? this.peerService.decorateVmPublic(pub) : pub;
   }
 
   async create(request: VmCreateRequest, internal?: { skipWarmCheckout?: boolean; poolTag?: "warm" }): Promise<VmPublic> {
     validateCreateRequest(request, this.limits);
+    await this.peerService?.validateCreateRequest(request);
     const active = (await this.store.list()).filter((vm) => vm.state !== "DELETED" && vm.poolTag !== "warm");
     if (active.length >= this.limits.maxVms) {
       throw new HttpError(429, `VM quota exceeded (maxVms=${this.limits.maxVms})`);
@@ -112,7 +120,7 @@ export class VmService {
     }
 
     // Optional warm pool checkout path (only for plain creates without user overlay snapshot).
-    if (this.warmPool?.enabled && !requestedOverlaySnapshotId && !internal?.skipWarmCheckout) {
+    if (this.warmPool?.enabled && !requestedOverlaySnapshotId && !internal?.skipWarmCheckout && !(request.peerLinks?.length) && !(request.secretEnv?.length)) {
       const fromPool = await this.tryCheckoutWarmVm(request);
       if (fromPool) return fromPool;
     }
@@ -180,6 +188,7 @@ export class VmService {
       snapshotStageMs = Date.now() - tSnapshotStageStart;
     }
     const storageMs = Date.now() - tStorageStart;
+    const peerPatch = (await this.peerService?.buildCreatePatch(request, id)) ?? {};
 
     const vm: VmRecord = {
       id,
@@ -198,10 +207,12 @@ export class VmService {
       logsDir,
       createdAt,
       baseSeedSnapshotId,
-      poolTag: internal?.poolTag
+      poolTag: internal?.poolTag,
+      ...peerPatch
     };
 
     await this.store.create(vm);
+    await this.peerService?.persistPeerLinks(vm.id, request.peerLinks);
     await this.activity?.logEvent({
       type: "vm.created",
       entityType: "vm",
@@ -215,6 +226,7 @@ export class VmService {
       let firecrackerMs = 0;
       let snapshotLoadMs = 0;
       let networkMs = 0;
+      const allowManagerGateway = hasPeerLinksInRequest(request);
 
       let snapshotIdForBoot: string | undefined;
       const canUseLegacyTemplateSnapshot =
@@ -231,7 +243,7 @@ export class VmService {
         if (snapshotExists) {
           mode = "snapshot";
           const tNetworkStart = Date.now();
-          await this.network.configure(vm, tapName, { up: false });
+          await this.network.configure(vm, tapName, { up: false, allowManagerGateway });
           networkMs += Date.now() - tNetworkStart;
           try {
             const tRestoreStart = Date.now();
@@ -261,7 +273,7 @@ export class VmService {
 
       if (mode === "boot") {
         const tNetworkStart = Date.now();
-        await this.network.configure(vm, tapName);
+        await this.network.configure(vm, tapName, { allowManagerGateway });
         networkMs += Date.now() - tNetworkStart;
         const tFirecrackerStart = Date.now();
         await this.firecracker.createAndStart(vm, rootfsPath, vm.kernelPath, tapName, vm.overlayPath);
@@ -303,8 +315,9 @@ export class VmService {
         });
       }
 
-      await this.agentClient.applyAllowlist(vm.id, request.allowIps, vm.outboundInternet);
+      await this.agentClient.applyAllowlist(vm.id, request.allowIps, vm.outboundInternet, { allowManagerGateway });
       await this.store.update(vm.id, { state: "RUNNING", provisionMode: mode });
+      await this.peerService?.onVmRunning(vm.id);
       await this.activity?.logEvent({
         type: "vm.started",
         entityType: "vm",
@@ -339,7 +352,8 @@ export class VmService {
     if (internal?.poolTag === "warm") {
       this.warmPoolVmIds.add(vm.id);
     }
-    return toPublic(latest ?? vm);
+    const pub = toPublic(latest ?? vm);
+    return this.peerService ? this.peerService.decorateVmPublic(pub) : pub;
   }
 
   private async createWithLegacySnapshotRestore(request: VmCreateRequest, snapshotId: string): Promise<VmPublic> {
@@ -385,6 +399,7 @@ export class VmService {
       diskSizeBytes: mbToBytes(requestedMb)
     });
     const storageMs = Date.now() - tStorageStart;
+    const peerPatch = (await this.peerService?.buildCreatePatch(request, id)) ?? {};
 
     const vm: VmRecord = {
       id,
@@ -401,10 +416,12 @@ export class VmService {
       overlayPath: prepared.overlayPath,
       kernelPath: prepared.kernelPath,
       logsDir: prepared.logsDir,
-      createdAt
+      createdAt,
+      ...peerPatch
     };
 
     await this.store.create(vm);
+    await this.peerService?.persistPeerLinks(vm.id, request.peerLinks);
     await this.activity?.logEvent({
       type: "vm.created",
       entityType: "vm",
@@ -418,8 +435,9 @@ export class VmService {
       let firecrackerMs = 0;
       let snapshotLoadMs = 0;
       let networkMs = 0;
+      const allowManagerGateway = hasPeerLinksInRequest(request);
       const tNetworkStart = Date.now();
-      await this.network.configure(vm, tapName);
+      await this.network.configure(vm, tapName, { allowManagerGateway });
       networkMs += Date.now() - tNetworkStart;
 
       const tRestoreStart = Date.now();
@@ -453,8 +471,9 @@ export class VmService {
       await this.network.bringUpTap(tapName);
       networkMs += Date.now() - tBringTapStart;
 
-      await this.agentClient.applyAllowlist(vm.id, request.allowIps, vm.outboundInternet);
+      await this.agentClient.applyAllowlist(vm.id, request.allowIps, vm.outboundInternet, { allowManagerGateway });
       await this.store.update(vm.id, { state: "RUNNING", provisionMode: mode });
+      await this.peerService?.onVmRunning(vm.id);
       const totalMs = Date.now() - tTotalStart;
       // eslint-disable-next-line no-console
       console.info("[vm-provision]", {
@@ -474,7 +493,8 @@ export class VmService {
     }
 
     const latest = await this.store.get(vm.id);
-    return toPublic(latest ?? vm);
+    const pub = toPublic(latest ?? vm);
+    return this.peerService ? this.peerService.decorateVmPublic(pub) : pub;
   }
 
   private async resolveOverlayBaselinePath(snapshotId: string, meta: SnapshotMeta): Promise<string> {
@@ -815,7 +835,8 @@ export class VmService {
       const updatedVm = await this.store.get(vm.id);
       if (!updatedVm) throw new HttpError(404, "VM not found after update");
 
-      await this.network.configure(updatedVm, updatedVm.tapName);
+      const allowManagerGateway = (await this.peerService?.hasPeerLinks(updatedVm.id)) === true;
+      await this.network.configure(updatedVm, updatedVm.tapName, { allowManagerGateway });
       const tFirecrackerStart = Date.now();
       await this.firecracker.createAndStart(updatedVm, updatedVm.rootfsPath, updatedVm.kernelPath, updatedVm.tapName, updatedVm.overlayPath);
       const firecrackerMs = Date.now() - tFirecrackerStart;
@@ -823,8 +844,9 @@ export class VmService {
       await this.agentClient.health(updatedVm.id);
       const agentHealthMs = Date.now() - tAgentHealthStart;
       await this.agentClient.syncTime(updatedVm.id, { unixTimeMs: Date.now() }).catch(() => undefined);
-      await this.agentClient.applyAllowlist(updatedVm.id, updatedVm.allowIps, updatedVm.outboundInternet);
+      await this.agentClient.applyAllowlist(updatedVm.id, updatedVm.allowIps, updatedVm.outboundInternet, { allowManagerGateway });
       await this.store.update(updatedVm.id, { state: "RUNNING", provisionMode: "boot" });
+      await this.peerService?.onVmRunning(updatedVm.id);
       await this.activity?.logEvent({
         type: "vm.started",
         entityType: "vm",
@@ -849,6 +871,7 @@ export class VmService {
       throw new HttpError(409, `VM must be RUNNING to stop (state=${vm.state})`);
     }
     await this.store.update(vm.id, { state: "STOPPING" });
+    await this.peerService?.clearBridgeToken(vm.id);
 
     // Best-effort filesystem sync before stopping.
     // NOTE: the `sync` syscall may return before all writes reach the block device, so give the guest a moment.
@@ -886,6 +909,7 @@ export class VmService {
   async destroy(id: string): Promise<void> {
     const vm = await this.requireVm(id);
     this.warmPoolVmIds.delete(vm.id);
+    await this.peerService?.deleteConsumerMetadata(vm.id);
     const errors: string[] = [];
     await this.firecracker
       .destroy(vm)
@@ -917,7 +941,10 @@ export class VmService {
       throw new HttpError(400, `timeoutMs exceeds maxExecTimeoutMs=${this.limits.maxExecTimeoutMs}`);
     }
     const startedAt = Date.now();
-    const result = await this.agentClient.exec(vm.id, payload);
+    const result = await this.agentClient.exec(vm.id, {
+      ...payload,
+      env: await this.peerService?.mergeExecEnv(vm, payload.env)
+    });
     const durationMs = Date.now() - startedAt;
     await this.execLogs
       .append(
@@ -953,7 +980,11 @@ export class VmService {
       throw new HttpError(400, `timeoutMs exceeds maxRunTsTimeoutMs=${this.limits.maxRunTsTimeoutMs}`);
     }
     const startedAt = Date.now();
-    const result = await this.agentClient.runTs(vm.id, { ...payload, allowNet: vm.outboundInternet });
+    const result = await this.agentClient.runTs(vm.id, {
+      ...payload,
+      env: await this.peerService?.mergeEnvList(vm, payload.env),
+      allowNet: vm.outboundInternet || (await this.peerService?.hasPeerLinks(vm.id)) === true
+    });
     const durationMs = Date.now() - startedAt;
     await this.execLogs
       .append(
@@ -998,7 +1029,10 @@ export class VmService {
       throw new HttpError(400, `timeoutMs exceeds maxRunTsTimeoutMs=${this.limits.maxRunTsTimeoutMs}`);
     }
     const startedAt = Date.now();
-    const result = await this.agentClient.runJs(vm.id, payload);
+    const result = await this.agentClient.runJs(vm.id, {
+      ...payload,
+      env: await this.peerService?.mergeEnvList(vm, payload.env)
+    });
     const durationMs = Date.now() - startedAt;
     await this.execLogs
       .append(
@@ -1097,6 +1131,23 @@ export class VmService {
     return this.agentClient.download(vm.id, path);
   }
 
+  async syncPeers(id: string): Promise<void> {
+    await this.requireVm(id);
+    if (!this.peerService) {
+      throw new HttpError(501, "Peer service is not configured");
+    }
+    await this.peerService.syncPeerFilesystem(id);
+  }
+
+  async updatePeerSourceMode(id: string, alias: string, sourceMode: "hidden" | "mounted"): Promise<void> {
+    await this.requireVm(id);
+    if (!this.peerService) {
+      throw new HttpError(501, "Peer service is not configured");
+    }
+    await this.peerService.updatePeerSourceMode(id, alias, sourceMode);
+    await this.peerService.syncPeerFilesystem(id);
+  }
+
   private async requireVm(id: string): Promise<VmRecord> {
     const vm = await this.store.get(id);
     if (!vm || vm.state === "DELETED") {
@@ -1138,6 +1189,10 @@ function validateCreateRequest(req: VmCreateRequest, limits: VmService["limits"]
       throw new HttpError(400, "Invalid allowIps entry");
     }
   }
+}
+
+function hasPeerLinksInRequest(req: VmCreateRequest): boolean {
+  return Array.isArray(req.peerLinks) && req.peerLinks.length > 0;
 }
 
 function toPublic(vm: VmRecord): VmPublic {

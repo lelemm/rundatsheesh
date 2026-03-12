@@ -57,6 +57,20 @@
       "when": 1773266200000,
       "tag": "0007_seed_and_pool",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1773318000000,
+      "tag": "0008_peer_vms",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1773403200000,
+      "tag": "0009_peer_source_mode",
+      "breakpoints": true
     }
   ]
 }

@@ -19,7 +19,16 @@ export const vms = sqliteTable("vms", {
   createdAt: text("created_at").notNull(),
   provisionMode: text("provision_mode"),
   baseSeedSnapshotId: text("base_seed_snapshot_id"),
-  poolTag: text("pool_tag")
+  poolTag: text("pool_tag"),
+  secretEnvCiphertext: text("secret_env_ciphertext"),
+  bridgeTokenHash: text("bridge_token_hash")
+});
+
+export const vmPeerLinks = sqliteTable("vm_peer_links", {
+  consumerVmId: text("consumer_vm_id").notNull(),
+  providerVmId: text("provider_vm_id").notNull(),
+  alias: text("alias").notNull(),
+  sourceMode: text("source_mode").notNull().default("hidden")
 });
 
 export const guestImages = sqliteTable("guest_images", {

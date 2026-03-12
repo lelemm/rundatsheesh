@@ -1,4 +1,4 @@
-import type { VmCreateRequest, VmExecRequest, VmRecord, VmRunJsRequest, VmRunTsRequest } from "./vm.js";
+import type { VmCreateRequest, VmExecRequest, VmPeerLink, VmPeerSourceMode, VmRecord, VmRunJsRequest, VmRunTsRequest } from "./vm.js";
 
 export interface VmStore {
   create(vm: VmRecord): Promise<void>;
@@ -6,6 +6,14 @@ export interface VmStore {
   get(id: string): Promise<VmRecord | null>;
   list(): Promise<VmRecord[]>;
   delete(id: string): Promise<void>;
+}
+
+export interface VmPeerLinkStore {
+  replaceForConsumer(consumerVmId: string, links: VmPeerLink[]): Promise<void>;
+  listForConsumer(consumerVmId: string): Promise<VmPeerLink[]>;
+  getForConsumerAlias(consumerVmId: string, alias: string): Promise<VmPeerLink | null>;
+  updateSourceMode(consumerVmId: string, alias: string, sourceMode: VmPeerSourceMode): Promise<boolean>;
+  deleteForConsumer(consumerVmId: string): Promise<void>;
 }
 
 export interface FirecrackerManager {
@@ -25,14 +33,14 @@ export interface FirecrackerManager {
 
 export interface NetworkManager {
   allocateIp(): Promise<{ guestIp: string; tapName: string }>; 
-  configure(vm: VmRecord, tapName: string, options?: { up?: boolean }): Promise<void>;
+  configure(vm: VmRecord, tapName: string, options?: { up?: boolean; allowManagerGateway?: boolean }): Promise<void>;
   bringUpTap(tapName: string): Promise<void>;
   teardown(vm: VmRecord, tapName: string): Promise<void>;
 }
 
 export interface AgentClient {
   health(vmId: string): Promise<void>;
-  applyAllowlist(vmId: string, allowIps: string[], outboundInternet: boolean): Promise<void>;
+  applyAllowlist(vmId: string, allowIps: string[], outboundInternet: boolean, options?: { allowManagerGateway?: boolean }): Promise<void>;
   configureNetwork(
     vmId: string,
     payload: { ip: string; gateway: string; cidr?: number; mac?: string; iface?: string; dns?: string; dnsOnly?: boolean }
@@ -43,6 +51,7 @@ export interface AgentClient {
   runJs(vmId: string, payload: VmRunJsRequest): Promise<{ exitCode: number; stdout: string; stderr: string; result?: unknown; error?: unknown }>;
   upload(vmId: string, dest: string, data: Buffer): Promise<void>;
   download(vmId: string, path: string): Promise<Buffer>;
+  replaceTree(vmId: string, dest: string, data: Buffer, options?: { ownership?: "root" | "user"; readOnly?: boolean }): Promise<void>;
 }
 
 export interface VmStorageResult {

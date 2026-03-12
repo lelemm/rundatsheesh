@@ -72,7 +72,9 @@ function toRow(vm: VmRecord) {
     createdAt: vm.createdAt,
     provisionMode: vm.provisionMode ?? null,
     baseSeedSnapshotId: vm.baseSeedSnapshotId ?? null,
-    poolTag: vm.poolTag ?? null
+    poolTag: vm.poolTag ?? null,
+    secretEnvCiphertext: vm.secretEnvCiphertext ?? null,
+    bridgeTokenHash: vm.bridgeTokenHash ?? null
   };
 }
 
@@ -95,6 +97,8 @@ function fromRow(row: any): VmRecord {
     createdAt: String(row.createdAt),
     provisionMode: row.provisionMode ?? undefined,
     baseSeedSnapshotId: row.baseSeedSnapshotId ?? undefined,
-    poolTag: row.poolTag ?? undefined
+    poolTag: row.poolTag ?? undefined,
+    secretEnvCiphertext: row.secretEnvCiphertext ?? undefined,
+    bridgeTokenHash: row.bridgeTokenHash ?? undefined
   };
 }

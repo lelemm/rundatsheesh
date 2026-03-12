@@ -8,6 +8,13 @@ export type VmState =
   | "ERROR";
 
 export type VmProvisionMode = "boot" | "snapshot";
+export type VmPeerSourceMode = "hidden" | "mounted";
+
+export interface VmPeerLink {
+  alias: string;
+  vmId: string;
+  sourceMode?: VmPeerSourceMode;
+}
 
 export interface VmRecord {
   id: string;
@@ -28,6 +35,8 @@ export interface VmRecord {
   provisionMode?: VmProvisionMode;
   baseSeedSnapshotId?: string;
   poolTag?: "warm";
+  secretEnvCiphertext?: string;
+  bridgeTokenHash?: string;
 }
 
 export interface VmPublic {
@@ -40,6 +49,7 @@ export interface VmPublic {
   createdAt: string;
   provisionMode?: VmProvisionMode;
   imageId?: string;
+  peerLinks?: VmPeerLink[];
 }
 
 export interface VmCreateRequest {
@@ -52,6 +62,8 @@ export interface VmCreateRequest {
   snapshotId?: string;
   imageId?: string;
   diskSizeMb?: number;
+  secretEnv?: string[];
+  peerLinks?: VmPeerLink[];
 }
 
 export interface VmExecRequest {

@@ -10,13 +10,14 @@ import type { FirewallManager } from "../types/interfaces.js";
  * iptables isn't available in the guest image. When iptables is available, we enforce egress.
  */
 export class IptablesFirewallManager implements FirewallManager {
-  async applyAllowlist(allowIps: string[], outboundInternet: boolean): Promise<void> {
+  async applyAllowlist(allowIps: string[], outboundInternet: boolean, options?: { allowManagerGateway?: boolean }): Promise<void> {
     const allow = Boolean(outboundInternet);
     const ips = sanitizeIps(allowIps);
+    const allowManagerGateway = Boolean(options?.allowManagerGateway);
     try {
       await this.ensureChain();
       await this.flushChain();
-      await this.addBaseRules();
+      await this.addBaseRules({ allowManagerGateway });
       // If outbound is allowed, only allow destinations in the allowlist.
       if (allow) {
         for (const ip of ips) {
@@ -48,10 +49,13 @@ export class IptablesFirewallManager implements FirewallManager {
     await runCmd("iptables", ["-F", "RUN_DAT_SHEESH_OUT"]);
   }
 
-  private async addBaseRules(): Promise<void> {
+  private async addBaseRules(options?: { allowManagerGateway?: boolean }): Promise<void> {
     // Always allow loopback and established traffic.
     await runCmd("iptables", ["-A", "RUN_DAT_SHEESH_OUT", "-o", "lo", "-j", "ACCEPT"]);
     await runCmd("iptables", ["-A", "RUN_DAT_SHEESH_OUT", "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"]);
+    if (options?.allowManagerGateway) {
+      await runCmd("iptables", ["-A", "RUN_DAT_SHEESH_OUT", "-d", "172.16.0.1/32", "-j", "ACCEPT"]);
+    }
   }
 }
 

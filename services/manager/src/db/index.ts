@@ -22,6 +22,7 @@ export function createDb(input: { dialect: DbDialect; sqlitePath: string; databa
       dialect: input.dialect,
       db,
       vms: sqliteSchema.vms,
+      vmPeerLinks: sqliteSchema.vmPeerLinks,
       guestImages: sqliteSchema.guestImages,
       settings: sqliteSchema.settings,
       activityEvents: sqliteSchema.activityEvents,
@@ -40,6 +41,7 @@ export function createDb(input: { dialect: DbDialect; sqlitePath: string; databa
     dialect: input.dialect,
     db,
     vms: pgSchema.vms,
+    vmPeerLinks: pgSchema.vmPeerLinks,
     guestImages: pgSchema.guestImages,
     settings: pgSchema.settings,
     activityEvents: pgSchema.activityEvents,
@@ -50,4 +52,3 @@ export function createDb(input: { dialect: DbDialect; sqlitePath: string; databa
     }
   } as const;
 }
-

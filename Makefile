@@ -1,4 +1,4 @@
-.PHONY: deps build unit integration integration-bash test verify admin-ui-deps admin-ui-build publish
+.PHONY: deps build unit integration integration-bash integration-peer test verify admin-ui-deps admin-ui-build publish
 .PHONY: integration-alpine integration-alpine-bash integration-debian integration-debian-bash integrations integrations-bash
 
 guest-images:
@@ -49,6 +49,16 @@ unit:
 # Default integration (alpine busybox)
 integration:
 	cd tests/integration && npm test
+
+# Real-VM peer SDK integration with simple provider SDKs and proxy calls
+integration-peer:
+	@bash -lc 'set -euo pipefail; \
+	NVM_DIR="$${NVM_DIR:-$$HOME/.nvm}"; \
+	if [ -s "$$NVM_DIR/nvm.sh" ]; then \
+	  . "$$NVM_DIR/nvm.sh"; \
+	  nvm use 24; \
+	fi; \
+	cd tests/integration && INTEGRATION_IMAGE=debian VITEST_FILTER="peers:" npm test'
 
 # Alpine integration targets
 integration-alpine:

@@ -10,6 +10,8 @@ export interface EnvConfig {
   dbDialect: "sqlite" | "postgres";
   sqlitePath: string;
   databaseUrl?: string;
+  vmSecretKey?: string;
+  managerInternalBaseUrl: string;
   agentVsockPort: number;
   firecrackerBin: string;
   jailer: {
@@ -179,6 +181,8 @@ export function loadEnv(): EnvConfig {
     dbDialect,
     sqlitePath,
     databaseUrl,
+    vmSecretKey: process.env.VM_SECRET_KEY || undefined,
+    managerInternalBaseUrl: process.env.MANAGER_INTERNAL_BASE_URL ?? `http://172.16.0.1:${port}`,
     agentVsockPort,
     firecrackerBin,
     jailer: {

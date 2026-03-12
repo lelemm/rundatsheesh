@@ -39,6 +39,7 @@ describe("IptablesFirewallManager", async () => {
     expect(argsJoined.some((a) => a.includes("-A RUN_DAT_SHEESH_OUT -j DROP"))).toBe(true);
     // We ignore allowIps when outbound is disabled.
     expect(argsJoined.some((a) => a.includes("-d 8.8.8.8/32"))).toBe(false);
+    expect(argsJoined.some((a) => a.includes("-d 172.16.0.1/32"))).toBe(false);
   });
 
   it("allows only allowlisted destinations when outboundInternet=true", async () => {
@@ -50,5 +51,14 @@ describe("IptablesFirewallManager", async () => {
     expect(argsJoined.some((a) => a.includes("-A RUN_DAT_SHEESH_OUT -d 1.2.3.4/32 -j ACCEPT"))).toBe(true);
     expect(argsJoined.some((a) => a.includes("-A RUN_DAT_SHEESH_OUT -j DROP"))).toBe(true);
   });
-});
 
+  it("allows the manager gateway only when explicitly requested", async () => {
+    calls.length = 0;
+    const fw = new IptablesFirewallManager();
+    await fw.applyAllowlist([], false, { allowManagerGateway: true });
+
+    const argsJoined = calls.map((c) => c.args.join(" "));
+    expect(argsJoined.some((a) => a.includes("-A RUN_DAT_SHEESH_OUT -d 172.16.0.1/32 -j ACCEPT"))).toBe(true);
+    expect(argsJoined.some((a) => a.includes("-A RUN_DAT_SHEESH_OUT -j DROP"))).toBe(true);
+  });
+});

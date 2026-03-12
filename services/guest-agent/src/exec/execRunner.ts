@@ -32,10 +32,10 @@ export class ExecRunnerImpl implements ExecRunner {
       "--allow-read=/workspace,/tmp,/var/tmp,/etc/resolv.conf,/etc/hosts,/etc/nsswitch.conf,/etc/ssl/certs/ca-certificates.crt",
       "--allow-write=/workspace,/tmp,/var/tmp"
     ];
-    if (allowEnvNames.length) {
-      // Allow access only to the explicitly provided env vars.
-      args.push(`--allow-env=${allowEnvNames.join(",")}`);
-    }
+    // The jail process already runs with a minimal explicit env rather than inheriting the
+    // guest-agent environment. Always allow env reads inside that curated env so user code can
+    // safely observe missing vars as `null` instead of tripping Deno permission errors.
+    args.push(allowEnvNames.length ? `--allow-env=${allowEnvNames.join(",")}` : "--allow-env");
     if (payload.allowNet) {
       args.push("--allow-net");
     }

@@ -12,6 +12,8 @@ class FakeVmService {
   public startIds: string[] = [];
   public stopIds: string[] = [];
   public destroyIds: string[] = [];
+  public syncPeerIds: string[] = [];
+  public peerSourceModeUpdates: Array<{ id: string; alias: string; sourceMode: "hidden" | "mounted" }> = [];
   public execCalls: Array<{ id: string; cmd: string }> = [];
   public runTsCalls: Array<{ id: string; payload: Record<string, unknown> }> = [];
 
@@ -23,7 +25,15 @@ class FakeVmService {
     return this.listResult.find((vm) => vm.id === id) ?? null;
   }
 
-  async create(request: { cpu: number; memMb: number; allowIps: string[]; userOverlaySnapshotId?: string; snapshotId?: string }) {
+  async create(request: {
+    cpu: number;
+    memMb: number;
+    allowIps: string[];
+    userOverlaySnapshotId?: string;
+    snapshotId?: string;
+    secretEnv?: string[];
+    peerLinks?: Array<{ alias: string; vmId: string; sourceMode?: "hidden" | "mounted" }>;
+  }) {
     this.lastCreatePayload = request;
     const vm: VmPublic = {
       id: "vm-1",
@@ -57,6 +67,14 @@ class FakeVmService {
 
   async destroy(id: string) {
     this.destroyIds.push(id);
+  }
+
+  async syncPeers(id: string) {
+    this.syncPeerIds.push(id);
+  }
+
+  async updatePeerSourceMode(id: string, alias: string, sourceMode: "hidden" | "mounted") {
+    this.peerSourceModeUpdates.push({ id, alias, sourceMode });
   }
 
   async exec(id: string, payload: { cmd: string }) {
@@ -154,6 +172,28 @@ describe("manager API", () => {
     expect(service.lastCreatePayload?.userOverlaySnapshotId).toBe("snap-123");
   });
 
+  it("forwards secretEnv and peerLinks on VM create", async () => {
+    const service = new FakeVmService();
+    const app = buildTestApp(service);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/vms",
+      headers: { "x-api-key": apiKey },
+      payload: {
+        cpu: 1,
+        memMb: 256,
+        allowIps: [],
+        secretEnv: ["API_TOKEN=secret"],
+        peerLinks: [{ alias: "google", vmId: "provider-1", sourceMode: "mounted" }]
+      }
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(service.lastCreatePayload?.secretEnv).toEqual(["API_TOKEN=secret"]);
+    expect(service.lastCreatePayload?.peerLinks).toEqual([{ alias: "google", vmId: "provider-1", sourceMode: "mounted" }]);
+  });
+
   it("uses user scope by default for snapshots listing", async () => {
     const service = new FakeVmService();
     const app = buildTestApp(service);
@@ -183,6 +223,35 @@ describe("manager API", () => {
     expect(service.startIds).toEqual(["vm-1"]);
     expect(service.stopIds).toEqual(["vm-1"]);
     expect(service.destroyIds).toEqual(["vm-1"]);
+  });
+
+  it("syncs peer trees for a VM", async () => {
+    const service = new FakeVmService();
+    const app = buildTestApp(service);
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/vms/vm-1/peers/sync",
+      headers: { "x-api-key": apiKey }
+    });
+
+    expect(res.statusCode).toBe(204);
+    expect(service.syncPeerIds).toEqual(["vm-1"]);
+  });
+
+  it("updates peer source mode for an alias", async () => {
+    const service = new FakeVmService();
+    const app = buildTestApp(service);
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/v1/vms/vm-1/peers/google",
+      headers: { "x-api-key": apiKey },
+      payload: { sourceMode: "mounted" }
+    });
+
+    expect(res.statusCode).toBe(204);
+    expect(service.peerSourceModeUpdates).toEqual([{ id: "vm-1", alias: "google", sourceMode: "mounted" }]);
   });
 
   it("execs and runs TS", async () => {

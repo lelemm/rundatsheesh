@@ -47,6 +47,38 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     return false;
   };
 
+  app.get("/internal/v1/peer/invoke", async (_request, reply) => {
+    reply.code(405);
+    return { message: "Method Not Allowed" };
+  });
+
+  app.post("/internal/v1/peer/invoke", { bodyLimit: BODY_LIMITS.jsonMedium }, async (request, reply) => {
+    const auth = request.headers.authorization ?? "";
+    const token = auth.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : "";
+    if (!token) {
+      reply.code(401);
+      return { message: "Missing bearer token" };
+    }
+    const body = request.body as { alias?: string; modulePath?: string; exportName?: string; args?: unknown[]; timeoutMs?: number } | undefined;
+    if (!body || typeof body.alias !== "string" || typeof body.modulePath !== "string") {
+      reply.code(400);
+      return { message: "Invalid request body" };
+    }
+    if (!opts.deps.peerService) {
+      reply.code(501);
+      return { message: "Peer service is not configured" };
+    }
+    const payload = {
+      alias: body.alias,
+      modulePath: body.modulePath,
+      exportName: body.exportName,
+      args: body.args,
+      timeoutMs: body.timeoutMs
+    };
+    const result = await opts.deps.peerService.invokeWithBridgeToken(token, payload);
+    return { result };
+  });
+
   app.get(
     "/v1/admin/overview",
     {
@@ -896,7 +928,20 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
                     userOverlaySnapshotId: { type: "string" },
                     snapshotId: { type: "string" },
                     imageId: { type: "string" },
-                    diskSizeMb: { type: "number" }
+                    diskSizeMb: { type: "number" },
+                    secretEnv: { type: "array", items: { type: "string" } },
+                    peerLinks: {
+                      type: "array",
+                      items: {
+                        type: "object",
+                        required: ["alias", "vmId"],
+                        properties: {
+                          alias: { type: "string" },
+                          vmId: { type: "string" },
+                          sourceMode: { type: "string", enum: ["hidden", "mounted"] }
+                        }
+                      }
+                    }
                   }
                 },
                 examples: {
@@ -937,7 +982,21 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
               description: "Deprecated alias for userOverlaySnapshotId (legacy compatibility)"
             },
             imageId: { type: "string", description: "Optional guest image id (defaults to the configured default image)" },
-            diskSizeMb: { type: "number", description: "Optional disk size (MiB). Must be >= base rootfs size." }
+            diskSizeMb: { type: "number", description: "Optional disk size (MiB). Must be >= base rootfs size." },
+            secretEnv: { type: "array", items: { type: "string" }, description: 'Secret environment variables in the format "KEY=value"' },
+            peerLinks: {
+              type: "array",
+              items: {
+                type: "object",
+                required: ["alias", "vmId"],
+                properties: {
+                  alias: { type: "string" },
+                  vmId: { type: "string" },
+                  sourceMode: { type: "string", enum: ["hidden", "mounted"] }
+                }
+              },
+              description: "Linked provider VMs exposed to this VM as peer aliases"
+            }
           },
           examples: [
             { cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true, diskSizeMb: 512 },
@@ -968,7 +1027,7 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
               provisionMode: { type: "string" }
             }
           },
-          400: { type: "object" }
+          400: ERROR_RESPONSE
         }
       }
     },
@@ -983,6 +1042,8 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
             snapshotId?: string;
             imageId?: string;
             diskSizeMb?: number;
+            secretEnv?: string[];
+            peerLinks?: Array<{ alias?: string; vmId?: string; sourceMode?: "hidden" | "mounted" }>;
           }
         | undefined;
       if (!body || typeof body.cpu !== "number" || typeof body.memMb !== "number" || !Array.isArray(body.allowIps)) {
@@ -997,10 +1058,88 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
         userOverlaySnapshotId: body.userOverlaySnapshotId,
         snapshotId: body.snapshotId,
         imageId: body.imageId,
-        diskSizeMb: body.diskSizeMb
+        diskSizeMb: body.diskSizeMb,
+        secretEnv: body.secretEnv,
+        peerLinks: body.peerLinks?.map((link) => ({
+          alias: String(link.alias ?? ""),
+          vmId: String(link.vmId ?? ""),
+          sourceMode: link.sourceMode
+        }))
       });
       reply.code(201);
       return vm;
+    }
+  );
+
+  app.post(
+    "/v1/vms/:id/peers/sync",
+    {
+      schema: {
+        summary: "Sync peer mirrors and proxies",
+        description: "Rebuilds /workspace/peers for a running VM based on its configured peer links.",
+        tags: ["vms", "peers"],
+        params: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
+        response: {
+          204: { type: "null" },
+          400: ERROR_RESPONSE,
+          404: ERROR_RESPONSE,
+          409: ERROR_RESPONSE
+        }
+      }
+    },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      requireValidVmId(id);
+      await opts.deps.vmService.syncPeers(id);
+      reply.code(204);
+    }
+  );
+
+  app.patch(
+    "/v1/vms/:id/peers/:alias",
+    {
+      bodyLimit: BODY_LIMITS.jsonSmall,
+      schema: {
+        summary: "Update peer alias settings",
+        description: "Updates per-alias consumer peer settings and re-syncs /workspace/peers for the VM.",
+        tags: ["vms", "peers"],
+        params: {
+          type: "object",
+          required: ["id", "alias"],
+          properties: {
+            id: { type: "string" },
+            alias: { type: "string" }
+          }
+        },
+        body: {
+          type: "object",
+          required: ["sourceMode"],
+          properties: {
+            sourceMode: { type: "string", enum: ["hidden", "mounted"] }
+          }
+        },
+        response: {
+          204: { type: "null" },
+          400: ERROR_RESPONSE,
+          404: ERROR_RESPONSE,
+          409: ERROR_RESPONSE
+        }
+      }
+    },
+    async (request, reply) => {
+      const { id, alias } = request.params as { id: string; alias: string };
+      const body = request.body as { sourceMode?: "hidden" | "mounted" } | undefined;
+      requireValidVmId(id);
+      if (!alias) {
+        reply.code(400);
+        return { message: "Invalid peer alias" };
+      }
+      if (!body || (body.sourceMode !== "hidden" && body.sourceMode !== "mounted")) {
+        reply.code(400);
+        return { message: "Invalid request body" };
+      }
+      await opts.deps.vmService.updatePeerSourceMode(id, alias, body.sourceMode);
+      reply.code(204);
     }
   );
 

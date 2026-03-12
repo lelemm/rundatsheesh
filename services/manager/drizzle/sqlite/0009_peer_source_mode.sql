@@ -1,0 +1,1 @@
+ALTER TABLE `vm_peer_links` ADD `source_mode` text NOT NULL DEFAULT 'hidden';

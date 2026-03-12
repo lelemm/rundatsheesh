@@ -73,6 +73,7 @@ type VmPublic = {
   createdAt: string;
   provisionMode?: "boot" | "snapshot";
   imageId?: string;
+  peerLinks?: Array<{ alias: string; vmId: string; sourceMode?: "hidden" | "mounted" }>;
 };
 type SnapshotMeta = {
   id: string;
@@ -95,6 +96,8 @@ async function createVm(payload: {
   userOverlaySnapshotId?: string;
   snapshotId?: string;
   diskSizeMb?: number;
+  secretEnv?: string[];
+  peerLinks?: Array<{ alias: string; vmId: string; sourceMode?: "hidden" | "mounted" }>;
 }): Promise<VmPublic> {
   const started = Date.now();
   const body: Record<string, unknown> = { ...payload };
@@ -114,6 +117,7 @@ async function createVm(payload: {
 }
 
 async function deleteVm(vmId: string): Promise<void> {
+  if (!vmId) return;
   const res = await fetch(`${MANAGER_BASE}/v1/vms/${vmId}`, { method: "DELETE", headers: { "X-API-Key": API_KEY } });
   // best-effort
   if (!res.ok && res.status !== 404) {
@@ -180,6 +184,30 @@ async function startVm(vmId: string): Promise<void> {
   expect(res.status).toBe(204);
 }
 
+async function syncPeerTrees(vmId: string): Promise<void> {
+  const res = await fetch(`${MANAGER_BASE}/v1/vms/${vmId}/peers/sync`, {
+    method: "POST",
+    headers: { "X-API-Key": API_KEY }
+  });
+  expect(res.status).toBe(204);
+}
+
+async function setPeerSourceMode(vmId: string, alias: string, sourceMode: "hidden" | "mounted"): Promise<void> {
+  const { status, json } = await apiJson<{ message?: string }>("PATCH", `${MANAGER_BASE}/v1/vms/${vmId}/peers/${alias}`, { sourceMode });
+  expect({ status, message: json.message }).toEqual({ status: 204, message: undefined });
+}
+
+async function uploadTarToVm(vmId: string, dest: string, buf: Uint8Array): Promise<void> {
+  const { status, buf: body } = await apiBinary(
+    "POST",
+    `${MANAGER_BASE}/v1/vms/${vmId}/files/upload?dest=${encodeURIComponent(dest)}`,
+    buf
+  );
+  if (status !== 204) {
+    throw new Error(`upload failed (${status}): ${body.toString("utf-8", 0, 2048)}`);
+  }
+}
+
 async function waitForVmState(vmId: string, expectedState: string, timeoutMs = 30000): Promise<VmPublic> {
   const startTime = Date.now();
   while (Date.now() - startTime < timeoutMs) {
@@ -191,6 +219,40 @@ async function waitForVmState(vmId: string, expectedState: string, timeoutMs = 3
     await delay(500);
   }
   throw new Error(`VM ${vmId} did not reach state "${expectedState}" within ${timeoutMs}ms`);
+}
+
+async function waitForGuestEth0Ip(vmId: string, expectedIp: string, timeoutMs = 15000): Promise<string[]> {
+  const startTime = Date.now();
+  let ips: string[] = [];
+  let lastStdout = "";
+  let lastStderr = "";
+  let lastExitCode: number | null = null;
+
+  while (Date.now() - startTime < timeoutMs) {
+    const res = await vmExec(vmId, "ip -4 -o addr show dev eth0 | awk '{print $4}'");
+    lastExitCode = res.exitCode;
+    lastStdout = res.stdout;
+    lastStderr = res.stderr;
+
+    if (res.exitCode === 0) {
+      ips = res.stdout
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => s.split("/")[0]);
+
+      if (ips.includes(expectedIp)) {
+        return ips;
+      }
+    }
+
+    await delay(250);
+  }
+
+  throw new Error(
+    `VM ${vmId} guest eth0 did not report ${expectedIp} within ${timeoutMs}ms ` +
+      `(lastExitCode=${String(lastExitCode)}, ips=${JSON.stringify(ips)}, stdout=${JSON.stringify(lastStdout)}, stderr=${JSON.stringify(lastStderr)})`
+  );
 }
 
 async function vmExec(vmId: string, cmd: string): Promise<ExecResult> {
@@ -208,7 +270,7 @@ async function vmRunTs(vmId: string, code: string): Promise<ExecResult> {
   expect(status).toBe(200);
   if (json.exitCode !== 0) {
     // eslint-disable-next-line no-console
-    console.error("[it] run-ts nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr });
+    console.error("[it] run-ts nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr, error: json.error });
   }
   return json;
 }
@@ -218,7 +280,7 @@ async function vmRunJs(vmId: string, code: string): Promise<ExecResult> {
   expect(status).toBe(200);
   if (json.exitCode !== 0) {
     // eslint-disable-next-line no-console
-    console.error("[it] run-js nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr });
+    console.error("[it] run-js nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr, error: json.error });
   }
   return json;
 }
@@ -228,7 +290,7 @@ async function vmRunTsWithEnv(vmId: string, code: string, env: string[]): Promis
   expect(status).toBe(200);
   if (json.exitCode !== 0) {
     // eslint-disable-next-line no-console
-    console.error("[it] run-ts(env) nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr });
+    console.error("[it] run-ts(env) nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr, error: json.error });
   }
   return json;
 }
@@ -238,7 +300,7 @@ async function vmRunJsWithEnv(vmId: string, code: string, env: string[]): Promis
   expect(status).toBe(200);
   if (json.exitCode !== 0) {
     // eslint-disable-next-line no-console
-    console.error("[it] run-js(env) nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr });
+    console.error("[it] run-js(env) nonzero", { vmId, exitCode: json.exitCode, stdout: json.stdout, stderr: json.stderr, error: json.error });
   }
   return json;
 }
@@ -723,18 +785,8 @@ describe.sequential("run-dat-sheesh integration (vitest)", () => {
     const vm = await createVm({ cpu: 1, memMb: 256, allowIps: ["172.16.0.1/32"], outboundInternet: true });
     try {
       const info = await getVm(vm.id);
-      let ips: string[] = [];
-      for (let i = 0; i < 20; i += 1) {
-        const res = await vmExec(vm.id, "ip -4 -o addr show dev eth0 | awk '{print $4}'");
-        expect(res.exitCode).toBe(0);
-        ips = res.stdout
-          .split("\n")
-          .map((s) => s.trim())
-          .filter(Boolean)
-          .map((s) => s.split("/")[0]);
-        if (ips.includes(info.guestIp)) break;
-        await delay(250);
-      }
+      const timeoutMs = info.provisionMode === "snapshot" ? 15000 : 5000;
+      const ips = await waitForGuestEth0Ip(vm.id, info.guestIp, timeoutMs);
       expect(ips).toContain(info.guestIp);
     } finally {
       await deleteVm(vm.id);
@@ -1597,6 +1649,453 @@ result.set({
       await deleteVm(vm.id);
     }
   }, 120_000); // 2 minute timeout for power cycle operations
+
+  it("peers: expose manifest-first metadata, proxy remote SDK calls, allow per-alias source mounts, and work with snapshots", async () => {
+    const googleVm = await createVm({
+      cpu: 1,
+      memMb: 256,
+      allowIps: [],
+      outboundInternet: false,
+      secretEnv: ["GOOGLE_TOKEN=g-secret"]
+    });
+    const outlookVm = await createVm({
+      cpu: 1,
+      memMb: 256,
+      allowIps: [],
+      outboundInternet: false,
+      secretEnv: ["OUTLOOK_CLIENT=o-secret"]
+    });
+
+    let consumerVm: VmPublic | null = null;
+    let googleClone: VmPublic | null = null;
+    let consumerClone: VmPublic | null = null;
+
+    try {
+      const googleSdkRoot = path.join(tmpDir, "peer-google-sdk");
+      fs.mkdirSync(path.join(googleSdkRoot, ".rds-peer"), { recursive: true });
+      fs.mkdirSync(path.join(googleSdkRoot, "google"), { recursive: true });
+      fs.writeFileSync(
+        path.join(googleSdkRoot, "google", "mod.ts"),
+        [
+          'export async function listEvents(prefix: string) {',
+          '  const token = Deno.env.get("GOOGLE_TOKEN") ?? "missing";',
+          '  return [{ id: "g-1", summary: `${prefix}-${token}` }];',
+          '}'
+        ].join("\n") + "\n",
+        "utf-8"
+      );
+      fs.writeFileSync(
+        path.join(googleSdkRoot, ".rds-peer", "manifest.json"),
+        JSON.stringify(
+          {
+            sdk: {
+              name: "Google Calendar",
+              description: "Calendar access through a manifest-first peer SDK."
+            },
+            modules: [
+              {
+                path: "google/mod.ts",
+                description: "Google Calendar entrypoints.",
+                exports: [
+                  {
+                    name: "listEvents",
+                    description: "Return calendar events with the provider-side token embedded in the summary.",
+                    params: [{ name: "prefix", description: "Prefix to attach to each event summary", schema: { type: "string" } }],
+                    returns: {
+                      description: "A list of events.",
+                      schema: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            id: { type: "string" },
+                            summary: { type: "string" }
+                          },
+                          required: ["id", "summary"]
+                        }
+                      }
+                    },
+                    examples: [
+                      {
+                        description: "Fetch events and print the JSON payload",
+                        code:
+                          'import { listEvents } from "file:///workspace/peers/google/proxy/google/mod.ts";\n' +
+                          'console.log(JSON.stringify(await listEvents("demo")));'
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          null,
+          2
+        ) + "\n",
+        "utf-8"
+      );
+      const googleTar = path.join(tmpDir, "peer-google-sdk.tar.gz");
+      mustExec("tar", ["-czf", googleTar, "-C", googleSdkRoot, ".rds-peer", "google"], { stdio: "inherit" });
+      await uploadTarToVm(googleVm.id, "/workspace", new Uint8Array(fs.readFileSync(googleTar)));
+
+      const outlookSdkRoot = path.join(tmpDir, "peer-outlook-sdk");
+      fs.mkdirSync(path.join(outlookSdkRoot, ".rds-peer"), { recursive: true });
+      fs.mkdirSync(path.join(outlookSdkRoot, "outlook"), { recursive: true });
+      fs.writeFileSync(
+        path.join(outlookSdkRoot, "outlook", "mod.ts"),
+        [
+          "export async function importEvents(events: Array<{ summary: string }>) {",
+          '  const client = Deno.env.get("OUTLOOK_CLIENT") ?? "missing";',
+          "  return { imported: events.length, first: events[0]?.summary ?? null, client };",
+          "}"
+        ].join("\n") + "\n",
+        "utf-8"
+      );
+      fs.writeFileSync(
+        path.join(outlookSdkRoot, ".rds-peer", "manifest.json"),
+        JSON.stringify(
+          {
+            sdk: {
+              name: "Outlook Import",
+              description: "Import events into Outlook via a peer proxy."
+            },
+            modules: [
+              {
+                path: "outlook/mod.ts",
+                description: "Outlook entrypoints.",
+                exports: [
+                  {
+                    name: "importEvents",
+                    description: "Import an array of event summaries into Outlook.",
+                    params: [
+                      {
+                        name: "events",
+                        description: "Event summaries to import",
+                        schema: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: { summary: { type: "string" } },
+                            required: ["summary"]
+                          }
+                        }
+                      }
+                    ],
+                    returns: {
+                      description: "Import status details.",
+                      schema: {
+                        type: "object",
+                        properties: {
+                          imported: { type: "number" },
+                          first: { type: ["string", "null"] },
+                          client: { type: "string" }
+                        },
+                        required: ["imported", "first", "client"]
+                      }
+                    },
+                    examples: [
+                      {
+                        description: "Import Google events",
+                        code:
+                          'import { importEvents } from "file:///workspace/peers/outlook/proxy/outlook/mod.ts";\n' +
+                          'await importEvents([{ summary: "demo" }]);'
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          null,
+          2
+        ) + "\n",
+        "utf-8"
+      );
+      const outlookTar = path.join(tmpDir, "peer-outlook-sdk.tar.gz");
+      mustExec("tar", ["-czf", outlookTar, "-C", outlookSdkRoot, ".rds-peer", "outlook"], { stdio: "inherit" });
+      await uploadTarToVm(outlookVm.id, "/workspace", new Uint8Array(fs.readFileSync(outlookTar)));
+
+      const googleSecret = await vmRunTs(googleVm.id, 'console.log(Deno.env.get("GOOGLE_TOKEN") ?? "missing");');
+      expect(googleSecret.stdout.trim()).toBe("g-secret");
+      const outlookSecret = await vmRunTs(outlookVm.id, 'console.log(Deno.env.get("OUTLOOK_CLIENT") ?? "missing");');
+      expect(outlookSecret.stdout.trim()).toBe("o-secret");
+
+      consumerVm = await createVm({
+        cpu: 1,
+        memMb: 256,
+        allowIps: [],
+        outboundInternet: false,
+        peerLinks: [
+          { alias: "google", vmId: googleVm.id },
+          { alias: "outlook", vmId: outlookVm.id }
+        ]
+      });
+
+      const listPeers = await vmExec(consumerVm.id, "find /workspace/peers -maxdepth 4 -type f | sort");
+      expect(listPeers.exitCode).toBe(0);
+      expect(listPeers.stdout).toContain("/workspace/peers/index.json");
+      expect(listPeers.stdout).toContain("/workspace/peers/google/manifest.json");
+      expect(listPeers.stdout).toContain("/workspace/peers/google/README.md");
+      expect(listPeers.stdout).toContain("/workspace/peers/google/proxy/google/mod.ts");
+      expect(listPeers.stdout).toContain("/workspace/peers/outlook/manifest.json");
+      expect(listPeers.stdout).toContain("/workspace/peers/outlook/README.md");
+      expect(listPeers.stdout).toContain("/workspace/peers/outlook/proxy/outlook/mod.ts");
+      expect(listPeers.stdout).not.toContain("/workspace/peers/google/source/google/mod.ts");
+
+      const consumerDetails = await getVm(consumerVm.id);
+      expect(consumerDetails.peerLinks).toEqual([
+        { alias: "google", vmId: googleVm.id, sourceMode: "hidden" },
+        { alias: "outlook", vmId: outlookVm.id, sourceMode: "hidden" }
+      ]);
+
+      const indexDoc = JSON.parse((await vmExec(consumerVm.id, "cat /workspace/peers/index.json")).stdout);
+      expect(indexDoc.peers).toEqual([
+        {
+          alias: "google",
+          sdkName: "Google Calendar",
+          summary: "Calendar access through a manifest-first peer SDK.",
+          manifestPath: "/workspace/peers/google/manifest.json",
+          readmePath: "/workspace/peers/google/README.md",
+          proxyRoot: "/workspace/peers/google/proxy",
+          sourceMode: "hidden"
+        },
+        {
+          alias: "outlook",
+          sdkName: "Outlook Import",
+          summary: "Import events into Outlook via a peer proxy.",
+          manifestPath: "/workspace/peers/outlook/manifest.json",
+          readmePath: "/workspace/peers/outlook/README.md",
+          proxyRoot: "/workspace/peers/outlook/proxy",
+          sourceMode: "hidden"
+        }
+      ]);
+
+      const readme = await vmExec(consumerVm.id, "cat /workspace/peers/google/README.md");
+      expect(readme.stdout).toContain("Use proxy imports for execution");
+      expect(readme.stdout).toContain('import { listEvents } from "file:///workspace/peers/google/proxy/google/mod.ts";');
+
+      const hiddenSource = await vmExec(
+        consumerVm.id,
+        "test ! -e /workspace/peers/google/source/google/mod.ts && echo hidden"
+      );
+      expect(hiddenSource.stdout.trim()).toBe("hidden");
+
+      const remoteWorkflow = await vmRunTs(
+        consumerVm.id,
+        [
+          'const index = JSON.parse(await Deno.readTextFile("/workspace/peers/index.json"));',
+          'const googleManifest = JSON.parse(await Deno.readTextFile("/workspace/peers/google/manifest.json"));',
+          'const readme = await Deno.readTextFile("/workspace/peers/google/README.md");',
+          'import { listEvents } from "file:///workspace/peers/google/proxy/google/mod.ts";',
+          'import { importEvents } from "file:///workspace/peers/outlook/proxy/outlook/mod.ts";',
+          'const localGoogle = Deno.env.get("GOOGLE_TOKEN") ?? null;',
+          'const events = await listEvents("demo");',
+          'const result = await importEvents(events);',
+          'console.log(JSON.stringify({ index, sdkName: googleManifest.sdk.name, readmeHasProxyNote: readme.includes("Use proxy imports"), localGoogle, events, result }));'
+        ].join("\n")
+      );
+      expect(remoteWorkflow.exitCode).toBe(0);
+      const workflowJson = JSON.parse(remoteWorkflow.stdout.trim());
+      expect(workflowJson.index.peers[0].alias).toBe("google");
+      expect(workflowJson.sdkName).toBe("Google Calendar");
+      expect(workflowJson.readmeHasProxyNote).toBe(true);
+      expect(workflowJson.localGoogle).toBeNull();
+      expect(workflowJson.events[0].summary).toBe("demo-g-secret");
+      expect(workflowJson.result).toEqual({ imported: 1, first: "demo-g-secret", client: "o-secret" });
+
+      await setPeerSourceMode(consumerVm.id, "google", "mounted");
+      const mountedDetails = await getVm(consumerVm.id);
+      expect(mountedDetails.peerLinks).toEqual([
+        { alias: "google", vmId: googleVm.id, sourceMode: "mounted" },
+        { alias: "outlook", vmId: outlookVm.id, sourceMode: "hidden" }
+      ]);
+
+      const mountedSource = await vmExec(consumerVm.id, "cat /workspace/peers/google/source/google/mod.ts");
+      expect(mountedSource.exitCode).toBe(0);
+      expect(mountedSource.stdout).toContain("listEvents");
+      const stillHiddenOutlook = await vmExec(
+        consumerVm.id,
+        "test ! -e /workspace/peers/outlook/source/outlook/mod.ts && echo hidden"
+      );
+      expect(stillHiddenOutlook.stdout.trim()).toBe("hidden");
+      const writeSource = await vmExec(consumerVm.id, "echo no >> /workspace/peers/google/source/google/mod.ts");
+      expect(writeSource.exitCode).not.toBe(0);
+
+      fs.writeFileSync(
+        path.join(googleSdkRoot, "google", "mod.ts"),
+        [
+          'export async function listEvents(prefix: string) {',
+          '  const token = Deno.env.get("GOOGLE_TOKEN") ?? "missing";',
+          '  return [{ id: "g-1", summary: `${prefix}-v2-${token}` }];',
+          '}'
+        ].join("\n") + "\n",
+        "utf-8"
+      );
+      mustExec("tar", ["-czf", googleTar, "-C", googleSdkRoot, ".rds-peer", "google"], { stdio: "inherit" });
+      await uploadTarToVm(googleVm.id, "/workspace", new Uint8Array(fs.readFileSync(googleTar)));
+      await syncPeerTrees(consumerVm.id);
+
+      const syncedSource = await vmExec(consumerVm.id, "grep -n 'v2' /workspace/peers/google/source/google/mod.ts");
+      expect(syncedSource.exitCode).toBe(0);
+
+      const syncedWorkflow = await vmRunTs(
+        consumerVm.id,
+        [
+          'import { listEvents } from "file:///workspace/peers/google/proxy/google/mod.ts";',
+          'const events = await listEvents("demo");',
+          'console.log(JSON.stringify(events));'
+        ].join("\n")
+      );
+      expect(JSON.parse(syncedWorkflow.stdout.trim())[0].summary).toBe("demo-v2-g-secret");
+
+      const consumerSnapshot = await createSnapshot(consumerVm.id);
+      const clonePeerLinks = (await getVm(consumerVm.id)).peerLinks ?? [];
+      consumerClone = await createVm({
+        cpu: 1,
+        memMb: 256,
+        allowIps: [],
+        outboundInternet: false,
+        userOverlaySnapshotId: consumerSnapshot.id,
+        peerLinks: clonePeerLinks
+      });
+      const clonePeerFile = await vmExec(consumerClone.id, "test -f /workspace/peers/google/source/google/mod.ts && echo present");
+      expect(clonePeerFile.stdout.trim()).toBe("present");
+      const cloneIndex = JSON.parse((await vmExec(consumerClone.id, "cat /workspace/peers/index.json")).stdout);
+      expect(cloneIndex.peers[0].sourceMode).toBe("mounted");
+
+      const cloneWorkflow = await vmRunTs(
+        consumerClone.id,
+        [
+          'import { listEvents } from "file:///workspace/peers/google/proxy/google/mod.ts";',
+          'const events = await listEvents("clone");',
+          'console.log(JSON.stringify(events));'
+        ].join("\n")
+      );
+      expect(JSON.parse(cloneWorkflow.stdout.trim())[0].summary).toBe("clone-v2-g-secret");
+
+      await setPeerSourceMode(consumerVm.id, "google", "hidden");
+      const hiddenAgain = await vmExec(
+        consumerVm.id,
+        "test ! -e /workspace/peers/google/source/google/mod.ts && echo hidden-again"
+      );
+      expect(hiddenAgain.stdout.trim()).toBe("hidden-again");
+    } finally {
+      await deleteVm(consumerClone?.id ?? "");
+      await deleteVm(consumerVm?.id ?? "");
+      await deleteVm(outlookVm.id);
+      await deleteVm(googleVm.id);
+    }
+  }, 180_000);
+
+  it("peers: fails consumer creation when a provider manifest is missing", async () => {
+    const providerVm = await createVm({
+      cpu: 1,
+      memMb: 256,
+      allowIps: [],
+      outboundInternet: false,
+      secretEnv: ["API_TOKEN=secret"]
+    });
+
+    try {
+      const badRoot = path.join(tmpDir, "peer-missing-manifest");
+      fs.mkdirSync(path.join(badRoot, "broken"), { recursive: true });
+      fs.writeFileSync(path.join(badRoot, "broken", "mod.ts"), 'export async function nope() { return "nope"; }\n', "utf-8");
+      const tarPath = path.join(tmpDir, "peer-missing-manifest.tar.gz");
+      mustExec("tar", ["-czf", tarPath, "-C", badRoot, "broken"], { stdio: "inherit" });
+      await uploadTarToVm(providerVm.id, "/workspace", new Uint8Array(fs.readFileSync(tarPath)));
+
+      const before = await apiJson<VmPublic[]>("GET", `${MANAGER_BASE}/v1/vms`);
+      const beforeIds = new Set(before.json.map((vm) => vm.id));
+      const createRes = await apiJson<{ message?: string }>("POST", `${MANAGER_BASE}/v1/vms`, {
+        cpu: 1,
+        memMb: 256,
+        allowIps: [],
+        outboundInternet: false,
+        peerLinks: [{ alias: "broken", vmId: providerVm.id }]
+      });
+      expect(createRes.status).toBe(400);
+      expect(createRes.json.message).toContain("Peer alias broken: missing provider manifest");
+
+      const after = await apiJson<VmPublic[]>("GET", `${MANAGER_BASE}/v1/vms`);
+      for (const vm of after.json) {
+        if (!beforeIds.has(vm.id)) {
+          await deleteVm(vm.id);
+        }
+      }
+    } finally {
+      await deleteVm(providerVm.id);
+    }
+  }, 120_000);
+
+  it("peers: fails consumer creation when a manifest declares a non-callable export", async () => {
+    const providerVm = await createVm({
+      cpu: 1,
+      memMb: 256,
+      allowIps: [],
+      outboundInternet: false,
+      secretEnv: ["API_TOKEN=secret"]
+    });
+
+    try {
+      const badRoot = path.join(tmpDir, "peer-bad-export");
+      fs.mkdirSync(path.join(badRoot, ".rds-peer"), { recursive: true });
+      fs.mkdirSync(path.join(badRoot, "broken"), { recursive: true });
+      fs.writeFileSync(path.join(badRoot, "broken", "mod.ts"), 'export const notCallable = "value";\n', "utf-8");
+      fs.writeFileSync(
+        path.join(badRoot, ".rds-peer", "manifest.json"),
+        JSON.stringify(
+          {
+            sdk: { name: "Broken SDK", description: "Declares an invalid export." },
+            modules: [
+              {
+                path: "broken/mod.ts",
+                exports: [
+                  {
+                    name: "notCallable",
+                    description: "This should fail because it is not a function.",
+                    params: [],
+                    returns: { description: "Never returned", schema: { type: "null" } },
+                    examples: [
+                      {
+                        description: "Broken example",
+                        code: 'import { notCallable } from "file:///workspace/peers/broken/proxy/broken/mod.ts";'
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          null,
+          2
+        ) + "\n",
+        "utf-8"
+      );
+      const tarPath = path.join(tmpDir, "peer-bad-export.tar.gz");
+      mustExec("tar", ["-czf", tarPath, "-C", badRoot, ".rds-peer", "broken"], { stdio: "inherit" });
+      await uploadTarToVm(providerVm.id, "/workspace", new Uint8Array(fs.readFileSync(tarPath)));
+
+      const before = await apiJson<VmPublic[]>("GET", `${MANAGER_BASE}/v1/vms`);
+      const beforeIds = new Set(before.json.map((vm) => vm.id));
+      const createRes = await apiJson<{ message?: string }>("POST", `${MANAGER_BASE}/v1/vms`, {
+        cpu: 1,
+        memMb: 256,
+        allowIps: [],
+        outboundInternet: false,
+        peerLinks: [{ alias: "broken", vmId: providerVm.id }]
+      });
+      expect(createRes.status).toBe(400);
+      expect(createRes.json.message).toContain("Peer alias broken: declared export notCallable is not callable");
+
+      const after = await apiJson<VmPublic[]>("GET", `${MANAGER_BASE}/v1/vms`);
+      for (const vm of after.json) {
+        if (!beforeIds.has(vm.id)) {
+          await deleteVm(vm.id);
+        }
+      }
+    } finally {
+      await deleteVm(providerVm.id);
+    }
+  }, 120_000);
 
   // ============== OverlayFS Tests ==============
 

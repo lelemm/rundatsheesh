@@ -60,6 +60,24 @@ compute_dev_args() {
   fi
 }
 
+cleanup_integration_tmpdirs() {
+  local tmp_root="${1:-/tmp}"
+  local host_pattern="$tmp_root/run-dat-sheesh-it-*"
+
+  rm -rf $host_pattern >/dev/null 2>&1 && return 0
+  sudo -n rm -rf $host_pattern >/dev/null 2>&1 && return 0
+
+  # Last resort: use a root container to remove root-owned leftovers without
+  # requiring passwordless sudo in the caller session.
+  docker run --rm \
+    -v "$tmp_root:/host-tmp" \
+    --entrypoint /bin/sh \
+    node:22-bookworm \
+    -lc 'rm -rf /host-tmp/run-dat-sheesh-it-*' >/dev/null 2>&1 && return 0
+
+  return 1
+}
+
 wait_for_manager() {
   local api_key="$1"
   for i in {1..60}; do
@@ -98,9 +116,7 @@ compute_dev_args
 
 # Best-effort cleanup from prior interrupted runs.
 # This prefix is used by the vitest suite itself (see integration.test.ts).
-# Docker may create root-owned files, so try normal rm first, then sudo if needed.
-rm -rf /tmp/run-dat-sheesh-it-* >/dev/null 2>&1 || \
-  sudo -n rm -rf /tmp/run-dat-sheesh-it-* >/dev/null 2>&1 || true
+cleanup_integration_tmpdirs /tmp || true
 
 echo "Building guest artifacts (kernel + rootfs)..."
 make -C "$ROOT_DIR" guest-images
@@ -145,6 +161,7 @@ CID=$(docker run -d \
   -e ADMIN_EMAIL="$ADMIN_EMAIL" \
   -e ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   -e PORT="$MANAGER_PORT" \
+  -e VM_SECRET_KEY="${VM_SECRET_KEY:-integration-secret-key}" \
   -e STORAGE_ROOT=/var/lib/run-dat-sheesh \
   -e IMAGES_DIR=/var/lib/run-dat-sheesh/images \
   -e AGENT_VSOCK_PORT=8080 \
@@ -174,6 +191,7 @@ cleanup() {
     sudo -n rm -rf "${RDS_DATA_DIR:-}" >/dev/null 2>&1 || true
   rm -rf "${RDS_IMAGES_DIR:-}" >/dev/null 2>&1 || \
     sudo -n rm -rf "${RDS_IMAGES_DIR:-}" >/dev/null 2>&1 || true
+  cleanup_integration_tmpdirs /tmp || true
 }
 on_signal() {
   FAILED=1

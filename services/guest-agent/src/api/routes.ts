@@ -14,16 +14,18 @@ export interface ApiPluginOptions {
 export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts) => {
   const BODY_LIMITS = {
     json: 256 * 1024,
-    uploadCompressed: 10 * 1024 * 1024
+    uploadCompressed: 10 * 1024 * 1024,
+    internalReplaceTreeCompressed: 100 * 1024 * 1024
   };
 
   app.get("/health", async () => ({ status: "ok" }));
 
   app.post("/firewall/allowlist", { bodyLimit: BODY_LIMITS.json }, async (request, reply) => {
-    const body = request.body as { allowIps?: string[]; outboundInternet?: boolean };
+    const body = request.body as { allowIps?: string[]; outboundInternet?: boolean; allowManagerGateway?: boolean };
     const allowIps = body?.allowIps ?? [];
     const outboundInternet = Boolean(body?.outboundInternet);
-    await opts.firewallManager.applyAllowlist(allowIps, outboundInternet);
+    const allowManagerGateway = Boolean(body?.allowManagerGateway);
+    await opts.firewallManager.applyAllowlist(allowIps, outboundInternet, { allowManagerGateway });
     reply.code(204);
   });
 
@@ -110,6 +112,28 @@ export const apiPlugin: FastifyPluginAsync<ApiPluginOptions> = async (app, opts)
     } catch (err) {
       reply.code(400);
       return { message: "Invalid download path" };
+    }
+  });
+
+  app.post("/internal/files/replace-tree", { bodyLimit: BODY_LIMITS.internalReplaceTreeCompressed }, async (request, reply) => {
+    const query = request.query as { dest?: string; ownership?: "root" | "user"; readOnly?: string } | undefined;
+    const dest = query?.dest ?? "";
+    if (!dest) {
+      reply.code(400);
+      return { message: "dest is required" };
+    }
+    const ownership = query?.ownership === "user" ? "user" : "root";
+    const readOnly = String(query?.readOnly ?? "false").toLowerCase() === "true";
+    const body = request.body as unknown;
+    const stream = Buffer.isBuffer(body) ? Readable.from([body]) : request.raw;
+    try {
+      await opts.fileService.replaceTree(dest, stream, { ownership, readOnly });
+      reply.code(204);
+      return;
+    } catch (err) {
+      reply.code(400);
+      const detail = String((err as any)?.message ?? err);
+      return { message: "Invalid replace-tree request", detail: detail.slice(0, 500) };
     }
   });
 };

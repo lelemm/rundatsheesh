@@ -8,6 +8,7 @@ import { firecrackerVsockUdsPath } from "./firecracker/socketPaths.js";
 import { SimpleNetworkManager } from "./network/networkManager.js";
 import { LocalStorageProvider } from "./storage/storageProvider.js";
 import { SqlVmStore } from "./state/sqlVmStore.js";
+import { SqlVmPeerLinkStore } from "./state/sqlVmPeerLinkStore.js";
 import { VmService } from "./services/vmService.js";
 import { ActivityService } from "./telemetry/activityService.js";
 import { initOtel, shutdownOtel } from "./telemetry/otel.js";
@@ -15,6 +16,7 @@ import { ApiKeyService } from "./apiKey/apiKeyService.js";
 import fs from "node:fs/promises";
 import { computeSnapshotVersion } from "./snapshots/snapshotVersion.js";
 import { ImageService } from "./services/imageService.js";
+import { PeerService } from "./services/peer/peerService.js";
 import { WebhookService } from "./services/webhookService.js";
 import { WebhookDispatcher } from "./services/webhookDispatcher.js";
 
@@ -28,6 +30,7 @@ async function main() {
   const db = createDb({ dialect: env.dbDialect, sqlitePath: env.sqlitePath, databaseUrl: env.databaseUrl });
   await runMigrations({ dialect: db.dialect, db: db.db });
   const store = new SqlVmStore(db.db as any, db.vms as any);
+  const vmPeerLinks = new SqlVmPeerLinkStore(db.db as any, (db as any).vmPeerLinks);
   const activityService = new ActivityService(db.db as any, db.activityEvents as any);
   const apiKeyService = new ApiKeyService(db.db as any, db.apiKeys as any);
   const webhookService = new WebhookService(db.db as any, db.webhooks as any);
@@ -75,6 +78,14 @@ async function main() {
       ? await computeSnapshotVersion({ kernelPath: env.kernelPath, baseRootfsPath: env.baseRootfsPath })
       : "";
 
+  const peerService = new PeerService({
+    store,
+    peerLinks: vmPeerLinks,
+    agentClient,
+    vmSecretKey: env.vmSecretKey,
+    managerInternalBaseUrl: env.managerInternalBaseUrl
+  });
+
   const vmService = new VmService({
     store,
     firecracker,
@@ -82,6 +93,7 @@ async function main() {
     agentClient,
     storage,
     images,
+    peerService,
     limits: env.limits,
     activity: activityService,
     dnsServerIp: env.dnsServerIp,
@@ -91,6 +103,7 @@ async function main() {
 
   const deps = {
     store,
+    vmPeerLinks,
     firecracker,
     network,
     agentClient,
@@ -98,6 +111,7 @@ async function main() {
     storageRoot: env.storageRoot,
     images,
     vmService,
+    peerService,
     activityService,
     apiKeyService,
     webhookService

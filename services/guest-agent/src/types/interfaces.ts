@@ -11,7 +11,7 @@ export interface FirewallManager {
    * allowIps entries are expected to be IPv4 addresses or CIDRs accepted by iptables `-d`,
    * e.g. "1.2.3.4/32" or "10.0.0.0/8".
    */
-  applyAllowlist(allowIps: string[], outboundInternet: boolean): Promise<void>;
+  applyAllowlist(allowIps: string[], outboundInternet: boolean, options?: { allowManagerGateway?: boolean }): Promise<void>;
 }
 
 export interface ExecRunner {
@@ -23,6 +23,11 @@ export interface ExecRunner {
 export interface FileService {
   upload(dest: string, payload: NodeJS.ReadableStream): Promise<void>;
   download(path: string, replyStream: NodeJS.WritableStream): Promise<void>;
+  replaceTree(
+    dest: string,
+    payload: NodeJS.ReadableStream,
+    options?: { ownership?: "root" | "user"; readOnly?: boolean }
+  ): Promise<void>;
 }
 
 export interface NetworkConfigurator {

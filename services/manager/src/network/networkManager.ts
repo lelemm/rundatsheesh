@@ -22,7 +22,7 @@ export class SimpleNetworkManager implements NetworkManager {
     return { guestIp, tapName };
   }
 
-  async configure(vm: VmRecord, tapName: string, options?: { up?: boolean }): Promise<void> {
+  async configure(vm: VmRecord, tapName: string, options?: { up?: boolean; allowManagerGateway?: boolean }): Promise<void> {
     await this.ensureBridge();
     // If a previous session stopped without teardown, the tap may still exist.
     // Remove it so start is idempotent.
@@ -66,7 +66,7 @@ export class SimpleNetworkManager implements NetworkManager {
 
     // Enforce outbound allowlist at the host level (manager container) to prevent data leak.
     // This avoids relying on guest netfilter/iptables support.
-    await this.configureHostEgressAllowlist(vm, tapName);
+    await this.configureHostEgressAllowlist(vm, tapName, { allowManagerGateway: Boolean(options?.allowManagerGateway) });
   }
 
   async bringUpTap(tapName: string): Promise<void> {
@@ -99,7 +99,11 @@ export class SimpleNetworkManager implements NetworkManager {
     return `RDS_${safe}`.slice(0, 29);
   }
 
-  private async configureHostEgressAllowlist(vm: VmRecord, tapName: string): Promise<void> {
+  private async configureHostEgressAllowlist(
+    vm: VmRecord,
+    tapName: string,
+    options?: { allowManagerGateway?: boolean }
+  ): Promise<void> {
     const chain = this.chainNameForTap(tapName);
     const allowIps = (vm.allowIps ?? []).filter((x) => typeof x === "string" && x.length > 0);
 
@@ -111,6 +115,9 @@ export class SimpleNetworkManager implements NetworkManager {
     await execFileAsync("iptables", ["-A", chain, "-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT"]).catch(
       () => undefined
     );
+    if (options?.allowManagerGateway) {
+      await execFileAsync("iptables", ["-A", chain, "-d", this.options.gatewayIp, "-j", "ACCEPT"]).catch(() => undefined);
+    }
 
     // When outboundInternet=true, allow only destinations in allowIps. Otherwise, allow none (deny-by-default).
     if (vm.outboundInternet) {
@@ -125,9 +132,11 @@ export class SimpleNetworkManager implements NetworkManager {
     // Ensure packets from this VM hit the chain:
     // - INPUT: VM -> host services (e.g., gateway IP 172.16.0.1)
     // - FORWARD: VM -> outside via NAT
-    // When using a bridge, packets will appear as incoming on the bridge interface.
-    await this.ensureJump("INPUT", this.bridgeName, vm.guestIp, chain);
-    await this.ensureJump("FORWARD", this.bridgeName, vm.guestIp, chain);
+    // Depending on the host bridge setup, packets may be observed on the tap or the bridge.
+    for (const iface of new Set([tapName, this.bridgeName])) {
+      await this.ensureJump("INPUT", iface, vm.guestIp, chain);
+      await this.ensureJump("FORWARD", iface, vm.guestIp, chain);
+    }
   }
 
   private async ensureJump(parentChain: "INPUT" | "FORWARD", tapName: string, guestIp: string, targetChain: string): Promise<void> {
@@ -142,9 +151,11 @@ export class SimpleNetworkManager implements NetworkManager {
 
   private async teardownHostEgressAllowlist(vm: VmRecord, tapName: string): Promise<void> {
     const chain = this.chainNameForTap(tapName);
-    const rule = ["-i", this.bridgeName, "-s", vm.guestIp, "-j", chain];
-    await execFileAsync("iptables", ["-D", "INPUT", ...rule]).catch(() => undefined);
-    await execFileAsync("iptables", ["-D", "FORWARD", ...rule]).catch(() => undefined);
+    for (const iface of new Set([tapName, this.bridgeName])) {
+      const rule = ["-i", iface, "-s", vm.guestIp, "-j", chain];
+      await execFileAsync("iptables", ["-D", "INPUT", ...rule]).catch(() => undefined);
+      await execFileAsync("iptables", ["-D", "FORWARD", ...rule]).catch(() => undefined);
+    }
     await execFileAsync("iptables", ["-F", chain]).catch(() => undefined);
     await execFileAsync("iptables", ["-X", chain]).catch(() => undefined);
   }

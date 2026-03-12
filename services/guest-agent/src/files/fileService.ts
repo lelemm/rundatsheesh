@@ -7,6 +7,8 @@ import { JAIL_GROUP_ID, JAIL_USER_ID, spawnInJail, runInJail } from "../exec/jai
 import { SANDBOX_ROOT } from "../config/constants.js";
 const MAX_UPLOAD_COMPRESSED_BYTES = 10 * 1024 * 1024;
 const MAX_UPLOAD_UNCOMPRESSED_BYTES = 50 * 1024 * 1024;
+const MAX_REPLACE_TREE_COMPRESSED_BYTES = 100 * 1024 * 1024;
+const MAX_REPLACE_TREE_UNCOMPRESSED_BYTES = 250 * 1024 * 1024;
 const MAX_TAR_ENTRIES = 10_000;
 
 export class TarFileService implements FileService {
@@ -24,9 +26,12 @@ export class TarFileService implements FileService {
     const tmpHost = path.join(tmpDirHost, tmpName);
     const tmpChroot = `/tmp/${tmpName}`;
 
-    await streamToFile(payload, tmpHost, { maxBytes: MAX_UPLOAD_COMPRESSED_BYTES });
+    await streamToFile(payload, tmpHost, { maxBytes: MAX_REPLACE_TREE_COMPRESSED_BYTES });
     await fs.chown(tmpHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
-    await validateTarInJail(tmpChroot, { maxEntries: MAX_TAR_ENTRIES, maxUncompressedBytes: MAX_UPLOAD_UNCOMPRESSED_BYTES });
+    await validateTarInJail(tmpChroot, {
+      maxEntries: MAX_TAR_ENTRIES,
+      maxUncompressedBytes: MAX_REPLACE_TREE_UNCOMPRESSED_BYTES
+    });
 
     // Extract as uid/gid 1000 and prevent archives from controlling ownership or modes.
     const extract = await runInJail("/bin/tar", ["--no-same-owner", "--no-same-permissions", "--numeric-owner", "-xzf", tmpChroot, "-C", destChroot]);
@@ -56,6 +61,39 @@ export class TarFileService implements FileService {
         }
       });
     });
+  }
+
+  async replaceTree(
+    dest: string,
+    payload: NodeJS.ReadableStream,
+    options: { ownership?: "root" | "user"; readOnly?: boolean } = {}
+  ): Promise<void> {
+    const destHost = resolveWorkspacePathToHost(dest);
+    const destChroot = resolveWorkspacePathToChroot(dest);
+    const tmpName = `replace-tree-${randomUUID()}.tar.gz`;
+    const tmpDirHost = path.join(SANDBOX_ROOT, "tmp");
+    await fs.mkdir(tmpDirHost, { recursive: true });
+    const tmpHost = path.join(tmpDirHost, tmpName);
+    const tmpChroot = `/tmp/${tmpName}`;
+
+    await streamToFile(payload, tmpHost, { maxBytes: MAX_UPLOAD_COMPRESSED_BYTES });
+    await fs.chown(tmpHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
+    await validateTarInJail(tmpChroot, { maxEntries: MAX_TAR_ENTRIES, maxUncompressedBytes: MAX_UPLOAD_UNCOMPRESSED_BYTES });
+
+    await fs.rm(destHost, { recursive: true, force: true }).catch(() => undefined);
+    await fs.mkdir(destHost, { recursive: true });
+    await fs.chown(destHost, JAIL_USER_ID, JAIL_GROUP_ID).catch(() => undefined);
+
+    const extract = await runInJail("/bin/tar", ["--no-same-owner", "--no-same-permissions", "--numeric-owner", "-xzf", tmpChroot, "-C", destChroot]);
+    if (extract.exitCode !== 0) {
+      throw new Error(`Failed to extract archive: ${extract.stderr.slice(0, 500)}`);
+    }
+
+    const ownership = options.ownership ?? "root";
+    const ownerUid = ownership === "root" ? 0 : JAIL_USER_ID;
+    const ownerGid = ownership === "root" ? 0 : JAIL_GROUP_ID;
+    await applyOwnershipAndMode(destHost, { uid: ownerUid, gid: ownerGid, readOnly: options.readOnly ?? false });
+    await fs.rm(tmpHost, { force: true }).catch(() => undefined);
   }
 }
 
@@ -149,4 +187,23 @@ function isSafeTarPath(entry: string): boolean {
     return false;
   }
   return true;
+}
+
+async function applyOwnershipAndMode(
+  root: string,
+  input: { uid: number; gid: number; readOnly: boolean }
+): Promise<void> {
+  const stats = await fs.lstat(root);
+  if (stats.isDirectory()) {
+    await fs.chown(root, input.uid, input.gid).catch(() => undefined);
+    await fs.chmod(root, input.readOnly ? 0o555 : 0o755).catch(() => undefined);
+    const entries = await fs.readdir(root);
+    for (const entry of entries) {
+      await applyOwnershipAndMode(path.join(root, entry), input);
+    }
+    return;
+  }
+
+  await fs.chown(root, input.uid, input.gid).catch(() => undefined);
+  await fs.chmod(root, input.readOnly ? 0o444 : 0o644).catch(() => undefined);
 }
