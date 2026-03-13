@@ -12,7 +12,7 @@ const _geistMono = Geist_Mono({ subsets: ["latin"] })
 export const metadata: Metadata = {
   title: "run dat sheesh | Firecracker Sandbox MicroVMs",
   description:
-    "Run LLM-generated code safely in isolated Firecracker microVMs. Fast boot times, secure sandboxing, and powerful snapshot management.",
+    "Run LLM-generated code in isolated Firecracker microVMs, keep SDK credentials inside provider VMs, and connect workflow VMs through manager-routed peer proxies.",
   icons: {
     icon: "/logo.png",
     apple: "/logo.png",

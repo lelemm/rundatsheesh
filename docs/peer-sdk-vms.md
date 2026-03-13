@@ -1,128 +1,49 @@
 # Peer SDK VMs
 
-## What The Feature Does
+## What This Ships
 
-This feature lets you split trusted credentials and untrusted orchestration code across separate microVMs without giving the consumer VM direct access to provider source by default.
+The current implementation isolates SDKs into separate provider VMs and lets a consumer or workflow VM call them through manager-routed proxies.
 
-- A provider VM hosts one SDK and only the secrets that SDK needs.
-- A consumer VM links to one or more provider VMs by alias.
-- The consumer sees each provider in three LLM-friendly ways:
-  - `/workspace/peers/index.json`: catalog of available peer aliases.
-  - `/workspace/peers/<alias>/manifest.json`: structured SDK contract.
-  - `/workspace/peers/<alias>/README.md`: human-readable usage guide with import examples.
-  - `/workspace/peers/<alias>/proxy/...`: importable proxy modules that forward execution to the provider VM through the manager.
-- `/workspace/peers/<alias>/source/...` is hidden by default and only appears when that alias is explicitly switched to `sourceMode: "mounted"` for debugging.
-
-The consumer VM never receives the provider VM secrets through its own environment or workspace. Remote execution stays manager-routed:
+- A provider VM stores one SDK plus only the secrets that SDK needs through `secretEnv`.
+- A consumer VM declares `peerLinks` to provider VMs by alias.
+- The consumer does not get provider secrets in its own environment.
+- Remote calls flow through the manager, not directly between guests:
 
 `consumer VM -> manager internal bridge -> provider VM over vsock`
 
-## Prerequisites
+## What The Consumer VM Actually Sees
 
-Set `VM_SECRET_KEY` before starting the manager. This is used to encrypt provider `secretEnv` values at rest.
+After peer sync, the consumer VM gets a generated read-only peer workspace under `/workspace/peers`.
 
-```bash
-export VM_SECRET_KEY='change-this-to-a-long-random-string'
-./scripts/build-guest-image.sh
-docker compose up --build
-```
+- `/workspace/peers/index.json`
+  - Catalog of linked peer aliases.
+- `/workspace/peers/<alias>/manifest.json`
+  - Structured provider SDK contract.
+- `/workspace/peers/<alias>/README.md`
+  - Human-readable usage guide generated from the manifest.
+- `/workspace/peers/<alias>/proxy/...`
+  - Importable proxy modules that call back into the manager bridge.
+- `/workspace/peers/<alias>/source/...`
+  - Optional source mirror.
+  - Hidden by default.
+  - Only present when that alias has `sourceMode: "mounted"`.
 
-Relevant API endpoints used by this workflow:
+Bridge runtime files are written into:
 
-- `POST /v1/vms`
-- `POST /v1/vms/:id/files/upload`
-- `POST /v1/vms/:id/run-ts`
-- `POST /v1/vms/:id/peers/sync`
-- `PATCH /v1/vms/:id/peers/:alias`
-- `POST /v1/vms/:id/snapshots`
+- `/workspace/.rds/peer-bridge.json`
+- `/workspace/.rds/peer-runtime.ts`
+- `/workspace/.rds/peer-runtime.mjs`
+- `/workspace/.rds/peer-runtime.cjs`
 
-## Provider Contract
+## Provider SDK Contract
 
-Every provider SDK must include a manifest at:
+Each provider SDK must include:
 
-`/workspace/.rds-peer/manifest.json`
+- `/workspace/.rds-peer/manifest.json`
 
-Required manifest shape:
+That manifest is required. The manager validates it, validates declared modules under `/workspace`, and checks that the declared exports are actually callable.
 
-- `sdk.name`
-- `sdk.description`
-- `modules[]`
-- each module has:
-  - `path` relative to `/workspace`
-  - optional `description`
-  - `exports[]`
-- each export has:
-  - `name`
-  - `description`
-  - `params[]`
-  - `returns`
-  - `examples[]`
-
-Each param entry must contain:
-
-- `name`
-- `description`
-- `schema`
-
-`returns` must contain:
-
-- `description`
-- `schema`
-
-`schema` is treated as a JSON-schema-like object for documentation. In v1 the manager validates shape and declared callability, not full JSON Schema semantics.
-
-## LLM-Generated Provider Manifests
-
-The provider developer does not need to hand-write `manifest.json`. A coding LLM can generate it from the SDK source before the SDK is uploaded to the provider VM.
-
-Recommended provider-side workflow:
-
-1. Keep the SDK source on the host machine, not in the provider VM yet.
-2. Give the LLM access to the SDK folder you plan to upload.
-3. Ask the LLM to inspect exported callable entrypoints and generate `/workspace/.rds-peer/manifest.json`.
-4. Review the generated descriptions and examples once.
-5. Package the SDK code together with the generated manifest and upload both into `/workspace`.
-
-Rules the LLM should follow while generating the manifest:
-
-- Only include exports that are intended to be called remotely by consumers.
-- Ignore constants, types, internal helpers, and default exports unless the SDK explicitly expects them to be called through the proxy layer.
-- Use module paths relative to `/workspace`.
-- Infer param names from the function signature.
-- Infer param and return schemas conservatively. Prefer broad schemas over incorrect narrow ones.
-- Add examples that import from `file:///workspace/peers/<alias>/proxy/...`, not from provider source paths.
-- Describe behavior from the code itself. Do not mention provider secrets unless they matter to the contract.
-- Keep all params and return values JSON-serializable.
-
-Good inputs for the LLM:
-
-- entrypoint files such as `mod.ts`, `index.ts`, or the public exports barrel
-- any types/interfaces used by the public functions
-- small helper files only when they clarify shapes or behavior
-
-Suggested prompt for GPT-5.x or Codex:
-
-```text
-Read this SDK and generate /workspace/.rds-peer/manifest.json for the peer SDK system.
-
-Requirements:
-- Find the public exported functions intended for remote use.
-- Output valid JSON only.
-- Include sdk.name, sdk.description, modules[].path, optional module descriptions, and exports[].
-- For each export include name, description, params[], returns, and examples[].
-- Each param needs name, description, and schema.
-- Returns needs description and schema.
-- Paths must be relative to /workspace.
-- Examples must import from file:///workspace/peers/<alias>/proxy/... and call the exported function.
-- Exclude internal helpers, constants, and non-callable exports.
-- Keep schemas conservative and JSON-serializable.
-
-Before finalizing, check that every declared module exists and every declared export is actually exported by that module.
-```
-
-The output should be written into the SDK bundle as `.rds-peer/manifest.json` before creating the tarball for upload.
-
-## Minimal Valid Provider Manifest
+Minimal shape:
 
 ```json
 {
@@ -133,14 +54,15 @@ The output should be written into the SDK bundle as `.rds-peer/manifest.json` be
   "modules": [
     {
       "path": "google/mod.ts",
+      "description": "Google Calendar entrypoints.",
       "exports": [
         {
           "name": "listEvents",
-          "description": "List calendar events for a prefix.",
+          "description": "Return events for a prefix.",
           "params": [
             {
               "name": "prefix",
-              "description": "Prefix to attach to each event summary.",
+              "description": "Prefix to apply to each returned event summary.",
               "schema": { "type": "string" }
             }
           ],
@@ -160,7 +82,7 @@ The output should be written into the SDK bundle as `.rds-peer/manifest.json` be
           },
           "examples": [
             {
-              "description": "Fetch events and print them as JSON.",
+              "description": "Fetch events.",
               "code": "import { listEvents } from \"file:///workspace/peers/google/proxy/google/mod.ts\";\nconsole.log(JSON.stringify(await listEvents(\"demo\")));"
             }
           ]
@@ -171,9 +93,62 @@ The output should be written into the SDK bundle as `.rds-peer/manifest.json` be
 }
 ```
 
-## Rich Provider Example
+## Prerequisites
 
-Create a provider VM that will host one SDK and one secret scope.
+Set `VM_SECRET_KEY` before starting the manager. Provider `secretEnv` is encrypted at rest with this key.
+
+```bash
+export VM_SECRET_KEY='change-this-to-a-long-random-string'
+./scripts/build-guest-images.sh
+docker compose up --build
+```
+
+## Environment Variables That Matter
+
+Peer SDK VMs and warm pool behavior depend on manager env vars that are easy to miss.
+
+- `VM_SECRET_KEY`
+  - Required for peer/provider features.
+  - Must exist before using `secretEnv` or `peerLinks`.
+  - If it is missing, provider secret encryption cannot work and peer-enabled VM creation will fail.
+- `ENABLE_WARM_POOL`
+  - Turns the warm pool on or off.
+  - Default is `false`.
+- `WARM_POOL_TARGET`
+  - How many warm VMs the manager tries to keep ready.
+- `WARM_POOL_MAX_VMS`
+  - Upper bound for warm-pool managed VMs.
+
+Example:
+
+```bash
+export VM_SECRET_KEY='change-this-to-a-long-random-string'
+export ENABLE_WARM_POOL=false
+export WARM_POOL_TARGET=1
+export WARM_POOL_MAX_VMS=4
+```
+
+Warm pool caveats:
+
+- Warm pool needs a default image.
+  - The manager can only pre-provision warm VMs from the current default image.
+  - If no default image exists, warm pool cannot prepare anything useful.
+- Warm pool does not apply to peer/provider VMs that use `secretEnv` or `peerLinks`.
+  - Those VMs boot through the normal path so the manager can materialize peer state and secrets correctly.
+- If you enable warm pool in production, set a default image first through the Images API or admin UI.
+
+Relevant endpoints in the current implementation:
+
+- `POST /v1/vms`
+- `POST /v1/vms/:id/files/upload`
+- `POST /v1/vms/:id/run-ts`
+- `POST /v1/vms/:id/peers/sync`
+- `PATCH /v1/vms/:id/peers/:alias`
+- `POST /v1/vms/:id/snapshots`
+
+## Create A Provider VM
+
+Create a provider VM with only the secret scope that SDK needs.
 
 ```bash
 curl -sS -H "X-API-Key: dev-key" \
@@ -190,7 +165,7 @@ curl -sS -H "X-API-Key: dev-key" \
   http://127.0.0.1:3000/v1/vms
 ```
 
-Upload the SDK files plus the generated provider manifest into `/workspace`.
+Build a provider bundle locally with both the SDK source and `.rds-peer/manifest.json`.
 
 ```bash
 mkdir -p /tmp/google-sdk/.rds-peer /tmp/google-sdk/google
@@ -206,7 +181,7 @@ cat >/tmp/google-sdk/.rds-peer/manifest.json <<'JSON'
 {
   "sdk": {
     "name": "Google Calendar",
-    "description": "Calendar access through a manifest-first peer SDK."
+    "description": "Calendar access through a peer SDK."
   },
   "modules": [
     {
@@ -215,11 +190,11 @@ cat >/tmp/google-sdk/.rds-peer/manifest.json <<'JSON'
       "exports": [
         {
           "name": "listEvents",
-          "description": "Return calendar events for a prefix.",
+          "description": "Return events for a prefix.",
           "params": [
             {
               "name": "prefix",
-              "description": "Prefix to attach to each event summary.",
+              "description": "Prefix to apply to each returned event summary.",
               "schema": { "type": "string" }
             }
           ],
@@ -239,7 +214,7 @@ cat >/tmp/google-sdk/.rds-peer/manifest.json <<'JSON'
           },
           "examples": [
             {
-              "description": "Fetch events and print them as JSON.",
+              "description": "Fetch events.",
               "code": "import { listEvents } from \"file:///workspace/peers/google/proxy/google/mod.ts\";\nconsole.log(JSON.stringify(await listEvents(\"demo\")));"
             }
           ]
@@ -258,7 +233,7 @@ curl -sS -H "X-API-Key: dev-key" \
   "http://127.0.0.1:3000/v1/vms/<google-vm-id>/files/upload?dest=/workspace"
 ```
 
-Sanity check the provider VM directly.
+Sanity check the provider VM directly:
 
 ```bash
 curl -sS -H "X-API-Key: dev-key" \
@@ -267,9 +242,9 @@ curl -sS -H "X-API-Key: dev-key" \
   "http://127.0.0.1:3000/v1/vms/<google-vm-id>/run-ts"
 ```
 
-## Snapshot A Provider VM With The SDK Already Loaded
+## Snapshot A Provider VM
 
-After the SDK is uploaded, snapshot that VM so later provider VMs do not need the SDK uploaded again.
+Once the provider VM already contains the SDK bundle, snapshot it so future provider VMs can start from that state.
 
 ```bash
 curl -sS -H "X-API-Key: dev-key" \
@@ -277,7 +252,7 @@ curl -sS -H "X-API-Key: dev-key" \
   "http://127.0.0.1:3000/v1/vms/<google-vm-id>/snapshots"
 ```
 
-That returns a snapshot id such as `snap-...`. Create future provider VMs from it:
+Create a new provider VM from that snapshot:
 
 ```bash
 curl -sS -H "X-API-Key: dev-key" \
@@ -287,19 +262,21 @@ curl -sS -H "X-API-Key: dev-key" \
     "memMb": 256,
     "allowIps": [],
     "outboundInternet": false,
-    "userOverlaySnapshotId": "snap-...",
+    "userOverlaySnapshotId": "snap-<provider-snapshot-id>",
     "secretEnv": [
-      "GOOGLE_TOKEN=google-secret-token"
+      "GOOGLE_TOKEN=rotated-secret"
     ]
   }' \
   http://127.0.0.1:3000/v1/vms
 ```
 
-The SDK files and manifest come from the snapshot disk layer. The provider secret still comes from `secretEnv` at VM creation time.
+The SDK files come from the snapshot. The secret scope still comes from the new VM create request.
 
-## Create A Consumer VM That Can Call Providers
+## Create A Consumer VM
 
-Create a workflow VM and link provider aliases to provider VM ids.
+Create a workflow VM with peer links to the provider VMs.
+
+If you want only manifests, README files, and proxies, keep `sourceMode` hidden.
 
 ```bash
 curl -sS -H "X-API-Key: dev-key" \
@@ -317,9 +294,17 @@ curl -sS -H "X-API-Key: dev-key" \
   http://127.0.0.1:3000/v1/vms
 ```
 
-`alias` is the local name the consumer VM uses under `/workspace/peers/<alias>`.
+If you want LLM-readable source from the start, set `sourceMode: "mounted"` on that alias:
 
-Peer metadata and proxies are synced automatically on create and start. You can force a refresh after changing a provider VM:
+```json
+{
+  "alias": "google",
+  "vmId": "<google-vm-id>",
+  "sourceMode": "mounted"
+}
+```
+
+Peer sync runs automatically on VM create and VM start. You can also force a resync:
 
 ```bash
 curl -sS -H "X-API-Key: dev-key" \
@@ -327,103 +312,11 @@ curl -sS -H "X-API-Key: dev-key" \
   "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/peers/sync"
 ```
 
-## What Appears Inside The Consumer VM
+## Show Or Hide Provider Source
 
-Default layout:
+By default, provider source is hidden from the consumer. If you want `cat`, `grep`, `find`, or `sed` over the mirrored SDK source, switch that alias to `mounted`.
 
-```text
-/workspace/peers/
-  index.json
-  google/
-    manifest.json
-    README.md
-    proxy/
-      google/mod.ts
-  outlook/
-    manifest.json
-    README.md
-    proxy/
-      outlook/mod.ts
-```
-
-When one alias is explicitly mounted for source debugging:
-
-```text
-/workspace/peers/
-  google/
-    manifest.json
-    README.md
-    proxy/
-      google/mod.ts
-    source/
-      .rds-peer/manifest.json
-      google/mod.ts
-```
-
-- `index.json` is the LLM entrypoint for discovery.
-- `manifest.json` is the structured SDK contract.
-- `README.md` is the human-readable usage guide.
-- `proxy` is the importable remote-execution layer.
-- `source` is optional and debug-only.
-
-## LLM-First Workflow Inside The Consumer VM
-
-Recommended workflow for a coding agent inside the consumer VM:
-
-1. Read `/workspace/peers/index.json`.
-2. Pick the relevant alias and read `/workspace/peers/<alias>/README.md` or `manifest.json`.
-3. Import from `/workspace/peers/<alias>/proxy/...`.
-4. Compose the higher-level workflow locally in the consumer VM.
-5. Only enable `/source` for a specific alias when explicit human debugging is needed.
-
-Discovery commands from the consumer VM:
-
-```bash
-curl -sS -H "X-API-Key: dev-key" \
-  -H "content-type: application/json" \
-  -d '{"cmd":"find /workspace/peers -maxdepth 3 -type f | sort"}' \
-  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/exec"
-```
-
-```bash
-curl -sS -H "X-API-Key: dev-key" \
-  -H "content-type: application/json" \
-  -d '{"cmd":"cat /workspace/peers/index.json"}' \
-  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/exec"
-```
-
-```bash
-curl -sS -H "X-API-Key: dev-key" \
-  -H "content-type: application/json" \
-  -d '{"cmd":"sed -n \"1,200p\" /workspace/peers/google/README.md"}' \
-  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/exec"
-```
-
-```bash
-curl -sS -H "X-API-Key: dev-key" \
-  -H "content-type: application/json" \
-  -d '{"cmd":"cat /workspace/peers/google/manifest.json"}' \
-  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/exec"
-```
-
-## How To Call A Provider SDK From Consumer Code
-
-The consumer imports from `proxy`.
-
-```bash
-curl -sS -H "X-API-Key: dev-key" \
-  -H "content-type: application/json" \
-  -d '{
-    "code": "const index = JSON.parse(await Deno.readTextFile(\"/workspace/peers/index.json\"));\nconst googleManifest = JSON.parse(await Deno.readTextFile(\"/workspace/peers/google/manifest.json\"));\nimport { listEvents } from \"file:///workspace/peers/google/proxy/google/mod.ts\";\nimport { importEvents } from \"file:///workspace/peers/outlook/proxy/outlook/mod.ts\";\nconst events = await listEvents(\"demo\");\nconst result = await importEvents(events);\nconsole.log(JSON.stringify({ index, sdk: googleManifest.sdk.name, events, result }));"
-  }' \
-  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/run-ts"
-```
-
-The arguments and return values must be JSON-serializable. The provider VM secret env is injected only on the provider side.
-
-## Enable Source For One Alias When Debugging
-
-Source is hidden by default. Mount it for one alias only when explicit debugging is needed.
+Enable source for one alias:
 
 ```bash
 curl -sS -H "X-API-Key: dev-key" \
@@ -443,12 +336,162 @@ curl -sS -H "X-API-Key: dev-key" \
   "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/peers/google"
 ```
 
-## Limits In V1
+Each patch also re-syncs `/workspace/peers`.
 
-- Provider manifests are required.
-- Manifest schemas are documentation-only and are not fully JSON Schema validated.
-- Proxies support callable exports only.
+## What The Consumer VM Can Inspect
+
+Always available:
+
+```text
+/workspace/peers/
+  index.json
+  google/
+    manifest.json
+    README.md
+    proxy/
+      google/
+        mod.ts
+  outlook/
+    manifest.json
+    README.md
+    proxy/
+      outlook/
+        mod.ts
+```
+
+When `sourceMode: "mounted"` for an alias:
+
+```text
+/workspace/peers/
+  google/
+    source/
+      .rds-peer/
+        manifest.json
+      google/
+        mod.ts
+```
+
+Discovery examples:
+
+```bash
+curl -sS -H "X-API-Key: dev-key" \
+  -H "content-type: application/json" \
+  -d '{"cmd":"find /workspace/peers -maxdepth 4 -type f | sort"}' \
+  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/exec"
+```
+
+```bash
+curl -sS -H "X-API-Key: dev-key" \
+  -H "content-type: application/json" \
+  -d '{"cmd":"cat /workspace/peers/index.json"}' \
+  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/exec"
+```
+
+```bash
+curl -sS -H "X-API-Key: dev-key" \
+  -H "content-type: application/json" \
+  -d '{"cmd":"sed -n \"1,200p\" /workspace/peers/google/README.md"}' \
+  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/exec"
+```
+
+When source is mounted:
+
+```bash
+curl -sS -H "X-API-Key: dev-key" \
+  -H "content-type: application/json" \
+  -d '{"cmd":"grep -n \"listEvents\" /workspace/peers/google/source/google/mod.ts"}' \
+  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/exec"
+```
+
+## How To Call Provider SDKs From Consumer Code
+
+The consumer imports from `proxy`, not from provider source.
+
+```bash
+curl -sS -H "X-API-Key: dev-key" \
+  -H "content-type: application/json" \
+  -d '{
+    "code": "import { listEvents } from \"file:///workspace/peers/google/proxy/google/mod.ts\";\nimport { importEvents } from \"file:///workspace/peers/outlook/proxy/outlook/mod.ts\";\nconst localGoogle = Deno.env.get(\"GOOGLE_TOKEN\") ?? null;\nconst events = await listEvents(\"demo\");\nconst result = await importEvents(events);\nconsole.log(JSON.stringify({ localGoogle, events, result }));"
+  }' \
+  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/run-ts"
+```
+
+Behavior:
+
+- `localGoogle` is `null` in the consumer VM because provider secrets are not injected there.
+- `listEvents(...)` executes inside the Google provider VM with that provider's `secretEnv`.
+- `importEvents(...)` executes inside the Outlook provider VM with its own `secretEnv`.
+
+## How Communication Works
+
+At runtime:
+
+1. Consumer code imports `file:///workspace/peers/<alias>/proxy/...`.
+2. Proxy modules call `/workspace/.rds/peer-runtime.*`.
+3. That runtime posts to `POST /internal/v1/peer/invoke` on the manager using the consumer bridge token.
+4. The manager verifies:
+   - the bridge token belongs to that consumer VM
+   - the alias is linked for that consumer
+   - the provider VM exists and is running
+5. The manager runs generated helper code inside the provider VM with `run-ts` or `run-js`.
+6. The provider helper imports the real provider module under `/workspace/...`, calls the declared export, and returns JSON-serializable data.
+
+There is no direct guest-to-guest traffic.
+
+## Snapshotting Consumer VMs
+
+Consumer snapshots can capture:
+
+- generated `/workspace/peers`
+- mounted source mirrors if any alias is in `mounted` mode
+- generated `/workspace/.rds` bridge runtime
+
+That lets you clone a workflow VM that already has peer discovery material in place.
+
+```bash
+curl -sS -H "X-API-Key: dev-key" \
+  -X POST \
+  "http://127.0.0.1:3000/v1/vms/<consumer-vm-id>/snapshots"
+```
+
+Create a new workflow VM from that snapshot:
+
+```bash
+curl -sS -H "X-API-Key: dev-key" \
+  -H "content-type: application/json" \
+  -d '{
+    "cpu": 1,
+    "memMb": 256,
+    "allowIps": [],
+    "outboundInternet": false,
+    "userOverlaySnapshotId": "snap-<consumer-snapshot-id>",
+    "peerLinks": [
+      { "alias": "google", "vmId": "<google-vm-id>" },
+      { "alias": "outlook", "vmId": "<outlook-vm-id>" }
+    ]
+  }' \
+  http://127.0.0.1:3000/v1/vms
+```
+
+## Recommended LLM Workflow
+
+For a coding LLM such as Codex:
+
+1. Read `/workspace/peers/index.json`.
+2. Pick the relevant alias.
+3. Read `/workspace/peers/<alias>/README.md` and `manifest.json`.
+4. Import from `/workspace/peers/<alias>/proxy/...`.
+5. Only request `sourceMode: "mounted"` when the manifest and README are not enough.
+6. If source is mounted, inspect `/workspace/peers/<alias>/source/...` with `find`, `cat`, `grep`, and `sed`.
+7. Compose multi-provider workflows in the consumer VM.
+
+The LLM should never assume provider secrets are readable in the consumer VM.
+
+## Current Limits
+
+- Provider bundles must ship `.rds-peer/manifest.json`.
+- Only callable exports declared in the manifest are proxied.
 - Arguments and results must be JSON-serializable.
-- No direct guest-to-guest networking is used.
-- `source` is hidden by default and only appears per alias when `sourceMode` is set to `"mounted"`.
-- If a provider SDK or manifest changes, run `POST /v1/vms/:id/peers/sync` or restart the consumer VM.
+- Source mirrors are optional per alias and controlled by `sourceMode`.
+- Source mirrors are synced copies, not live mounts.
+- If provider code or manifest changes, run `POST /v1/vms/:id/peers/sync` or restart the consumer VM.

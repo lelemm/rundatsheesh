@@ -18,7 +18,7 @@ import {
 import { useState } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 
-export function LandingPage() {
+export function LandingPage({ latestGitHubTag }: { latestGitHubTag?: string | null }) {
   const [copied, setCopied] = useState<string | null>(null)
 
   const copyCode = (code: string, id: string) => {
@@ -28,15 +28,19 @@ export function LandingPage() {
   }
 
   const codeExamples = {
-    createVm: `curl -X POST http://localhost:3000/v1/vms \\
+    createVm: `# Consumer/workflow VM linked to isolated provider SDK VMs
+curl -X POST http://localhost:3000/v1/vms \\
   -H "X-API-Key: $API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
     "cpu": 1,
-    "memMb": 512,
-    "allowIps": ["172.16.0.1/32"],
+    "memMb": 256,
+    "allowIps": [],
     "outboundInternet": false,
-    "diskSizeMb": 512
+    "peerLinks": [
+      { "alias": "google", "vmId": "vm-google", "sourceMode": "hidden" },
+      { "alias": "outlook", "vmId": "vm-outlook" }
+    ]
   }'`,
     execCommand: `curl -X POST http://localhost:3000/v1/vms/{vm_id}/exec \\
   -H "X-API-Key: $API_KEY" \\
@@ -59,11 +63,17 @@ export function LandingPage() {
 # - SNAPSHOT_TEMPLATE_*: size legacy template snapshot VMs (optional)
 cat > .env <<'ENV'
 API_KEY=dev-key
+VM_SECRET_KEY=change-me
 ADMIN_EMAIL=admin@example.com
 ADMIN_PASSWORD=admin
 RUN_DAT_SHEESH_DATA_DIR=./data
 RUN_DAT_SHEESH_IMAGES_DIR=./images
 ROOTFS_CLONE_MODE=auto
+# Warm pool is optional and needs a default image.
+# Warm pool is skipped for VMs created with secretEnv or peerLinks.
+ENABLE_WARM_POOL=false
+WARM_POOL_TARGET=1
+WARM_POOL_MAX_VMS=4
 SNAPSHOT_TEMPLATE_CPU=1
 SNAPSHOT_TEMPLATE_MEM_MB=256
 ENV
@@ -109,6 +119,7 @@ services:
 
     environment:
       API_KEY: \${API_KEY:-dev-key}
+      VM_SECRET_KEY: \${VM_SECRET_KEY}
       ADMIN_EMAIL: \${ADMIN_EMAIL:-admin@example.com}
       ADMIN_PASSWORD: \${ADMIN_PASSWORD:-admin}
       PORT: 3000
@@ -116,6 +127,9 @@ services:
       IMAGES_DIR: /var/lib/run-dat-sheesh/images
       AGENT_VSOCK_PORT: 8080
       ROOTFS_CLONE_MODE: \${ROOTFS_CLONE_MODE:-auto}
+      ENABLE_WARM_POOL: \${ENABLE_WARM_POOL:-false}
+      WARM_POOL_TARGET: \${WARM_POOL_TARGET:-1}
+      WARM_POOL_MAX_VMS: \${WARM_POOL_MAX_VMS:-4}
       SNAPSHOT_TEMPLATE_CPU: \${SNAPSHOT_TEMPLATE_CPU:-1}
       SNAPSHOT_TEMPLATE_MEM_MB: \${SNAPSHOT_TEMPLATE_MEM_MB:-256}
     ports:
@@ -149,6 +163,8 @@ docker compose up -d
 # - Docs: http://localhost:3000/docs/
 # - Swagger: http://localhost:3000/swagger`,
   }
+
+  const latestTagLabel = latestGitHubTag ? `GitHub tag ${latestGitHubTag}` : "GitHub releases"
 
   return (
     <div className="min-h-screen bg-background">
@@ -206,16 +222,25 @@ docker compose up -d
               height={300}
               className="mx-auto mb-6 rounded-2xl object-cover"
             />
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-primary/30 bg-primary/10 text-primary text-sm mb-6">
-              <Server className="w-4 h-4" />
-              <span>Self-hosted • Open Source</span>
+            <div className="flex flex-wrap items-center justify-center gap-3 mb-6">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-primary/30 bg-primary/10 text-primary text-sm">
+                <Server className="w-4 h-4" />
+                <span>Self-hosted • Open Source</span>
+              </div>
+              <Link
+                href="https://github.com/lelemm/rundatsheesh/releases"
+                className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-border bg-card text-sm text-foreground hover:border-primary/40 transition-colors"
+              >
+                <Github className="w-4 h-4" />
+                <span>{latestTagLabel}</span>
+              </Link>
             </div>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-balance mb-6">
-              Run <span className="text-primary">Untrusted, LLM-Generated Code</span> on Your Infrastructure
+              Isolate <span className="text-primary">SDK Credentials and LLM Code</span> in Separate Firecracker VMs
             </h1>
             <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-6 text-pretty">
-              A self-hosted API for running untrusted, LLM-generated code in isolated VMs, with snapshots and full
-              control over your environment.
+              Run provider SDKs in dedicated microVMs, keep their secrets scoped with `secretEnv`, and let workflow VMs
+              call them through manager-routed proxies instead of sharing credentials across the whole runtime.
             </p>
             <div className="max-w-2xl mx-auto mb-8 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
               <span className="font-semibold">Alpha warning:</span> This app is in an early alpha state and may be very
@@ -232,6 +257,29 @@ docker compose up -d
                   <Terminal className="w-4 h-4" /> Quick Install
                 </Button>
               </Link>
+            </div>
+            <div className="grid gap-4 md:grid-cols-3 text-left max-w-5xl mx-auto mb-10">
+              <div className="rounded-xl border border-border bg-card p-5">
+                <p className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Provider VMs</p>
+                <p className="font-semibold mb-2">One SDK, one secret scope</p>
+                <p className="text-sm text-muted-foreground">
+                  Keep Google, Graph, or any other SDK in its own VM and inject only the env vars that provider needs.
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-5">
+                <p className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Manager Bridge</p>
+                <p className="font-semibold mb-2">No direct guest-to-guest trust</p>
+                <p className="text-sm text-muted-foreground">
+                  Consumer proxies call the manager bridge, which validates the alias and then invokes the provider VM over vsock.
+                </p>
+              </div>
+              <div className="rounded-xl border border-border bg-card p-5">
+                <p className="text-xs uppercase tracking-wide text-muted-foreground mb-2">Workflow VMs</p>
+                <p className="font-semibold mb-2">Discover, compose, and sync</p>
+                <p className="text-sm text-muted-foreground">
+                  Read peer manifests and README files, optionally mount mirrored source, and compose multi-SDK workflows locally.
+                </p>
+              </div>
             </div>
           </div>
 
@@ -299,30 +347,30 @@ docker compose up -d
       <section id="features" className="py-24 px-4 sm:px-6 lg:px-8">
         <div className="max-w-7xl mx-auto">
           <div className="text-center mb-16">
-            <h2 className="text-3xl sm:text-4xl font-bold mb-4">A Complete Code Execution API</h2>
+            <h2 className="text-3xl sm:text-4xl font-bold mb-4">Sandboxing For Untrusted Code And Untrusted SDKs</h2>
             <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-              Everything you need to safely run untrusted code on your own infrastructure
+              The current platform is built around provider VMs, consumer VMs, proxy generation, and manager-routed calls.
             </p>
           </div>
 
           <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
             <div className="p-6 rounded-xl border border-border bg-card hover:border-primary/50 transition-colors">
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-                <Clock className="w-6 h-6 text-primary" />
+                <Shield className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="font-semibold text-lg mb-2">Provisioning You Can Rely On</h3>
+              <h3 className="font-semibold text-lg mb-2">Peer SDK Isolation</h3>
               <p className="text-muted-foreground text-sm">
-                Provision from prebuilt images so capacity is available on demand and stays consistent across runs.
+                Provider SDKs live in separate microVMs with their own `secretEnv`, so workflow code never gets those credentials locally.
               </p>
             </div>
 
             <div className="p-6 rounded-xl border border-border bg-card hover:border-primary/50 transition-colors">
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-                <Shield className="w-6 h-6 text-primary" />
+                <Code2 className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="font-semibold text-lg mb-2">Hardware Isolation</h3>
+              <h3 className="font-semibold text-lg mb-2">Manifest-First Discovery</h3>
               <p className="text-muted-foreground text-sm">
-                Each VM runs in its own Firecracker microVM. True hardware-level isolation, not containers.
+                Consumer VMs get `/workspace/peers/index.json`, per-alias manifests, generated README files, and importable proxy modules.
               </p>
             </div>
 
@@ -330,19 +378,19 @@ docker compose up -d
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
                 <Layers className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="font-semibold text-lg mb-2">Snapshots API</h3>
+              <h3 className="font-semibold text-lg mb-2">Manager-Routed Communication</h3>
               <p className="text-muted-foreground text-sm">
-                Create and restore VM snapshots via API. Perfect for checkpointing and reproducible runs.
+                Consumer proxies call the manager bridge, which validates the peer link and executes the real SDK code inside the provider VM.
               </p>
             </div>
 
             <div className="p-6 rounded-xl border border-border bg-card hover:border-primary/50 transition-colors">
               <div className="w-12 h-12 rounded-lg bg-primary/10 flex items-center justify-center mb-4">
-                <Box className="w-6 h-6 text-primary" />
+                <Clock className="w-6 h-6 text-primary" />
               </div>
-              <h3 className="font-semibold text-lg mb-2">Images API</h3>
+              <h3 className="font-semibold text-lg mb-2">Snapshots And Warm Starts</h3>
               <p className="text-muted-foreground text-sm">
-                Upload custom kernels and root filesystems as images, then pick an imageId when creating VMs.
+                Snapshot provider VMs after SDK upload and snapshot consumer VMs after peer sync to cut repeated setup and boot time.
               </p>
             </div>
           </div>
@@ -392,7 +440,7 @@ docker compose up -d
               <Link href="/docs/requirements" className="text-primary hover:underline">
                 system requirements
               </Link>{" "}
-              for details.
+              for details. Peer SDK VMs require `VM_SECRET_KEY`, and warm pool only works when a default image is configured.
             </p>
           </div>
         </div>
@@ -500,23 +548,23 @@ docker compose up -d
               <div className="p-4 rounded-lg border border-border bg-card">
                 <p className="font-mono text-sm mb-2">
                   <span className="text-success font-semibold">POST</span>{" "}
-                  <span className="text-muted-foreground">/v1/vms/:id/snapshot</span>
+                  <span className="text-muted-foreground">/v1/vms/:id/snapshots</span>
                 </p>
                 <p className="text-sm text-muted-foreground">Create VM snapshot</p>
               </div>
               <div className="p-4 rounded-lg border border-border bg-card">
                 <p className="font-mono text-sm mb-2">
                   <span className="text-success font-semibold">POST</span>{" "}
-                  <span className="text-muted-foreground">/v1/vms/:id/upload</span>
+                  <span className="text-muted-foreground">/v1/vms/:id/files/upload</span>
                 </p>
                 <p className="text-sm text-muted-foreground">Upload file to VM</p>
               </div>
               <div className="p-4 rounded-lg border border-border bg-card">
                 <p className="font-mono text-sm mb-2">
-                  <span className="text-blue-400 font-semibold">GET</span>{" "}
-                  <span className="text-muted-foreground">/v1/vms/:id/logs</span>
+                  <span className="text-success font-semibold">POST</span>{" "}
+                  <span className="text-muted-foreground">/v1/vms/:id/peers/sync</span>
                 </p>
-                <p className="text-sm text-muted-foreground">Stream VM logs</p>
+                <p className="text-sm text-muted-foreground">Rebuild peer manifests, README files, proxies, and optional source mounts</p>
               </div>
             </div>
             <div className="text-center mt-8">

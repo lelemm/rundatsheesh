@@ -12,6 +12,7 @@ It runs untrusted code **inside a Firecracker microVM**, with a host-side **mana
 - **Near-instant VM provisioning** (~50-100ms) via OverlayFS copy-on-write storage
 - **Minimal disk usage** - VMs share a read-only base image; only writes consume space
 - **Secure isolation** - Firecracker microVM + chroot jail + per-VM firewall
+- **Peer SDK isolation** - Keep provider SDKs and their secrets in separate VMs, then call them from workflow VMs through manager-routed proxies
 - **Simple REST API** - Create VMs, execute code, transfer files
 - **TypeScript/JavaScript execution** - Deno and Node.js support with structured results
 - **Snapshots** - Save VM state for fast restore
@@ -33,8 +34,8 @@ flowchart LR
 
 ## Quick links
 - **Quickstart (Docker Hub)**: see [Quickstart](./quickstart.md)
+- **Peer SDK VMs**: see [peer-sdk-vms.md on GitHub](https://github.com/lelemm/rundatsheesh/blob/main/docs/peer-sdk-vms.md)
 - **Architecture & Storage**: see [Architecture](./architecture.md) for OverlayFS details and orchestration patterns
 - **Build guest image**: see [Guest image](./guest-image.md)
 - **Environment variables**: see [Env vars](./env-vars.md)
 - **API usage**: see [API](./api.md) (or open [Swagger](../swagger))
-
